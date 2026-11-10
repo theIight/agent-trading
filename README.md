@@ -71,3 +71,19 @@ Chi tiết contract: [SPEC.md](SPEC.md). Plan: [plans/wyckoff-chart-agent.md](pl
 | `npm run lint` | ESLint |
 | `npm run build:web` | Build web tĩnh |
 | `npx tsx scripts/screenshot.ts [url] [out.png]` | Chụp ảnh UI (dùng Chrome đã cài) |
+| `npm run pm2:start` / `pm2:restart` / `pm2:stop` / `pm2:logs` | Chạy nền bằng pm2 (xem bên dưới) |
+
+## Chạy bằng pm2
+
+```bash
+npm run pm2:start      # build web rồi chạy wca-server (:8787) + wca-web (:5173, vite preview + proxy /api)
+npm run pm2:logs       # xem log
+npm run pm2:restart    # sau khi pull/sửa code (build lại web)
+npm run pm2:stop
+pm2 save && pm2 startup   # tự chạy lại khi khởi động máy (làm theo lệnh pm2 in ra)
+```
+
+* Mở `http://127.0.0.1:5173` như khi dev. MCP `wyckoff` không chạy bằng pm2 — agent tự spawn qua stdio.
+* Không chạy cùng lúc với `npm run dev` (trùng cổng 5173/8787).
+* Server chạy **không watch**: sửa code server → `npm run pm2:restart`.
+* pm2 lấy PATH từ shell lúc `pm2 start`. Nếu log báo không tìm thấy `claude`/`agy`, đặt `CLAUDE_BIN`/`AGY_BIN` là đường dẫn tuyệt đối trong `.env` rồi restart.
