@@ -1,0 +1,38 @@
+{
+  "name": "wyckoff-chart-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Chart giống TradingView + agent phân tích Wyckoff (Claude Code qua MCP) vẽ kết quả trực tiếp lên chart",
+  "workspaces": [
+    "packages/shared",
+    "apps/server",
+    "apps/mcp",
+    "apps/web"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -n server,web -c blue,magenta \"npm run dev -w @wca/server\" \"npm run dev -w @wca/web\"",
+    "dev:server": "npm run dev -w @wca/server",
+    "dev:web": "npm run dev -w @wca/web",
+    "build:web": "npm run build -w @wca/web",
+    "lint": "eslint .",
+    "typecheck": "tsc -p packages/shared && tsc -p apps/server && tsc -p apps/mcp && tsc -p apps/web",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.0",
+    "@playwright/test": "^1.65.0",
+    "@types/node": "^22.15.0",
+    "concurrently": "^9.2.0",
+    "eslint": "^10.14.0",
+    "globals": "^16.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.72.1",
+    "vitest": "^5.1.0"
+  }
+}

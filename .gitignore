@@ -1,0 +1,9 @@
+node_modules/
+dist/
+# Dữ liệu runtime: SQLite cache/lịch sử, ảnh chart, token nội bộ MCP
+data/
+.env
+.DS_Store
+*.log
+playwright-report/
+test-results/

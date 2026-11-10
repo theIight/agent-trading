@@ -1,0 +1,341 @@
+import { EventEmitter } from 'node:events';
+import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  buildTfPlan,
+  isRunnerId,
+  normalizeSymbol,
+  normalizeTfInput,
+  type RunnerId,
+  type RunnerInfo,
+  type InstrumentInfo,
+  type AnalysisRecord,
+  type AnalysisResult,
+  type Candle,
+  type ProgressEvent,
+  type TfPlanEntry,
+  type Timeframe,
+} from '@wca/shared';
+import type { KlineService } from '../market/klineService.ts';
+import type { AgentRunner } from '../runner/types.ts';
+import { referencedTfs, validateSubmission } from '../validate/index.ts';
+import type { AnalysisRepo } from './repo.ts';
+
+export interface StartInput {
+  symbol: string;
+  primaryTf: unknown;
+  contextTfs: unknown[];
+  /** data URL PNG chụp từ UI (tùy chọn). */
+  screenshot?: string;
+  /** Agent chạy phân tích (mặc định: `defaultRunner`). */
+  runner?: unknown;
+  model?: string;
+}
+
+export interface ServiceOptions {
+  maxTfs: number;
+  barsPerTf: number;
+  screenshotDir: string;
+  /** Số nến nạp khi validate (rộng hơn barsPerTf để chấp nhận event agent tìm được khi tự tải thêm). */
+  validationBars?: number;
+  /** R:R tối thiểu của trade setup (mặc định 2). */
+  minRiskReward?: number;
+  /** Runner mặc định khi request không chỉ định (mặc định: runner đầu tiên). */
+  defaultRunner?: RunnerId;
+  /** Thông tin nguồn dữ liệu của symbol (đưa vào prompt / get_analysis_request). */
+  instrumentOf?: (symbol: string) => InstrumentInfo;
+}
+
+export type SubmitOutcome =
+  | { ok: true; analysisId: string; warnings: string[] }
+  | { ok: false; errors: string[] };
+
+interface Job {
+  id: string;
+  runner: RunnerId;
+  req: { symbol: string; primaryTf: Timeframe; plan: TfPlanEntry[]; hasScreenshot: boolean; model?: string };
+}
+
+export class ServiceError extends Error {
+  constructor(message: string, readonly status = 400) {
+    super(message);
+  }
+}
+
+/**
+ * Điều phối phân tích: tạo bản ghi, chạy agent tuần tự (1 job/lần), nhận kết quả từ MCP,
+ * validate và phát sự kiện tiến trình (SSE).
+ */
+export class AnalysisService {
+  private readonly bus = new EventEmitter();
+  private readonly queue: Job[] = [];
+  private current: { id: string; abort: AbortController } | null = null;
+  private models = new Map<string, string>();
+  private readonly runners = new Map<RunnerId, AgentRunner>();
+  private readonly defaultRunner: RunnerId;
+
+  constructor(
+    private readonly repo: AnalysisRepo,
+    private readonly klines: KlineService,
+    runners: AgentRunner | AgentRunner[],
+    private readonly opts: ServiceOptions,
+  ) {
+    const list = Array.isArray(runners) ? runners : [runners];
+    if (!list.length) throw new Error('Cần ít nhất một agent runner');
+    for (const r of list) this.runners.set(r.id, r);
+    this.defaultRunner = opts.defaultRunner && this.runners.has(opts.defaultRunner) ? opts.defaultRunner : list[0]!.id;
+    this.bus.setMaxListeners(100);
+    fs.mkdirSync(opts.screenshotDir, { recursive: true });
+  }
+
+  // ---------- Sự kiện ----------
+  subscribe(listener: (e: ProgressEvent) => void, analysisId?: string): () => void {
+    const handler = (e: ProgressEvent) => {
+      if (!analysisId || e.analysisId === analysisId) listener(e);
+    };
+    this.bus.on('event', handler);
+    return () => this.bus.off('event', handler);
+  }
+
+  private emit(e: ProgressEvent): void {
+    this.bus.emit('event', e);
+  }
+
+  // ---------- Runner ----------
+  async runnerInfos(): Promise<RunnerInfo[]> {
+    return Promise.all(
+      [...this.runners.values()].map(async r => {
+        const a = r.availability();
+        return {
+          id: r.id,
+          label: r.label,
+          available: a.available,
+          reason: a.reason,
+          defaultModel: r.defaultModel,
+          models: a.available ? await r.listModels().catch(() => []) : [],
+          supportsScreenshot: r.supportsScreenshot,
+        };
+      }),
+    );
+  }
+
+  get defaultRunnerId(): RunnerId {
+    return this.defaultRunner;
+  }
+
+  // ---------- Khởi chạy ----------
+  start(input: StartInput): AnalysisRecord {
+    const symbol = normalizeSymbol(input.symbol);
+    if (!symbol) throw new ServiceError('Thiếu symbol');
+    const runnerId = input.runner === undefined ? this.defaultRunner : input.runner;
+    if (!isRunnerId(runnerId) || !this.runners.has(runnerId)) throw new ServiceError(`Agent không được bật: ${String(runnerId)}`);
+    const runner = this.runners.get(runnerId)!;
+    const avail = runner.availability();
+    if (!avail.available) throw new ServiceError(`${runner.label} không khả dụng: ${avail.reason ?? 'không rõ'}`);
+    const model = input.model?.trim() || undefined;
+    if (model && !/^[\w.:/-]{1,80}$/.test(model)) throw new ServiceError('Tên model không hợp lệ');
+    const planRes = buildTfPlan(input.primaryTf, input.contextTfs ?? [], this.opts.maxTfs);
+    if (!planRes.ok) throw new ServiceError(planRes.error);
+    const id = randomUUID();
+    const primaryTf = input.primaryTf as Timeframe;
+
+    let hasScreenshot = false;
+    if (input.screenshot) {
+      const m = /^data:image\/png;base64,(.+)$/.exec(input.screenshot);
+      if (!m) throw new ServiceError('screenshot phải là data URL PNG');
+      fs.writeFileSync(this.screenshotPath(id), Buffer.from(m[1]!, 'base64'));
+      hasScreenshot = true;
+    }
+
+    const rec: AnalysisRecord = {
+      id,
+      symbol,
+      primaryTf,
+      tfs: planRes.plan.map(p => p.tf),
+      status: 'RUNNING',
+      createdAt: Date.now(),
+      runner: runnerId,
+      model,
+    };
+    this.repo.create(rec);
+    this.queue.push({ id, runner: runnerId, req: { symbol, primaryTf, plan: planRes.plan, hasScreenshot: hasScreenshot && runner.supportsScreenshot, model } });
+    if (this.current) this.emitStep(id, `Đang chờ: còn ${this.queue.length} phân tích phía trước`);
+    void this.pump();
+    return rec;
+  }
+
+  cancel(id: string): boolean {
+    if (this.current?.id === id) {
+      this.current.abort.abort();
+      return true;
+    }
+    const idx = this.queue.findIndex(j => j.id === id);
+    if (idx >= 0) {
+      this.queue.splice(idx, 1);
+      this.finish(id, 'CANCELED', { error: 'Đã hủy' });
+      return true;
+    }
+    return false;
+  }
+
+  isBusy(): boolean {
+    return Boolean(this.current) || this.queue.length > 0;
+  }
+
+  private async pump(): Promise<void> {
+    if (this.current) return;
+    const job = this.queue.shift();
+    if (!job) return;
+    const abort = new AbortController();
+    this.current = { id: job.id, abort };
+    const runner = this.runners.get(job.runner)!;
+    const modelLabel = job.req.model ?? runner.defaultModel ?? 'model mặc định';
+    this.emit({ kind: 'status', analysisId: job.id, status: 'RUNNING', message: `Khởi chạy ${runner.label} · ${modelLabel}` });
+    this.models.set(job.id, `${runner.id} · ${modelLabel}`);
+    try {
+      const outcome = await runner.run(
+        { analysisId: job.id, ...job.req, barsPerTf: this.opts.barsPerTf, instrument: this.opts.instrumentOf?.(job.req.symbol) },
+        {
+          signal: abort.signal,
+          onStep: msg => this.emitStep(job.id, msg),
+          onText: text => this.emit({ kind: 'text', analysisId: job.id, text: text.slice(0, 2000), at: Date.now() }),
+          onModel: model => this.models.set(job.id, `${runner.id} · ${model}`),
+        },
+      );
+      const rec = this.repo.get(job.id);
+      if (rec?.status === 'RUNNING') {
+        // Agent kết thúc mà chưa nộp kết quả hợp lệ.
+        const canceled = abort.signal.aborted;
+        this.finish(job.id, canceled ? 'CANCELED' : 'FAILED', {
+          error: outcome.error ?? (outcome.resultText ? `Agent kết thúc mà chưa nộp kết quả: ${outcome.resultText.slice(0, 500)}` : 'Agent kết thúc mà chưa nộp kết quả'),
+        });
+      } else if (outcome.durationMs !== undefined) {
+        this.emitStep(job.id, `Hoàn tất trong ${Math.round((outcome.durationMs ?? 0) / 1000)}s`);
+      }
+    } catch (err) {
+      this.finish(job.id, 'FAILED', { error: (err as Error).message });
+    } finally {
+      this.current = null;
+      this.models.delete(job.id);
+      void this.pump();
+    }
+  }
+
+  private emitStep(analysisId: string, message: string): void {
+    this.emit({ kind: 'step', analysisId, message, at: Date.now() });
+  }
+
+  private finish(id: string, status: 'DONE' | 'FAILED' | 'CANCELED', payload: { result?: AnalysisResult; error?: string }): void {
+    this.repo.finish(id, status, payload);
+    const record = this.repo.get(id);
+    this.emit({ kind: 'status', analysisId: id, status, message: payload.error });
+    if (record) this.emit({ kind: 'result', analysisId: id, record });
+  }
+
+  // ---------- Dành cho MCP ----------
+  async getRequest(id: string) {
+    const rec = this.repo.get(id);
+    if (!rec) throw new ServiceError('Không tìm thấy analysisId', 404);
+    const planRes = buildTfPlan(rec.primaryTf, rec.tfs.filter(tf => tf !== rec.primaryTf));
+    if (!planRes.ok) throw new ServiceError(planRes.error, 500);
+    return {
+      analysisId: rec.id,
+      symbol: rec.symbol,
+      primaryTf: rec.primaryTf,
+      status: rec.status,
+      topDownOrder: planRes.plan,
+      barsPerTf: this.opts.barsPerTf,
+      hasScreenshot: fs.existsSync(this.screenshotPath(rec.id)),
+      lastClose: await this.lastClose(rec.symbol, rec.primaryTf as Timeframe),
+      instrument: this.opts.instrumentOf?.(rec.symbol),
+      minRiskReward: this.opts.minRiskReward ?? 2,
+    };
+  }
+
+  private async lastClose(symbol: string, tf: Timeframe): Promise<number | null> {
+    try {
+      const res = await this.klines.getKlines({ symbol, tf, limit: 2, closedOnly: true });
+      return res.candles.at(-1)?.close ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  screenshotPath(id: string): string {
+    return path.join(this.opts.screenshotDir, `${id.replace(/[^a-zA-Z0-9-]/g, '')}.png`);
+  }
+
+  /**
+   * Nhận kết quả agent. Có `analysisId` → gắn vào phân tích đang chạy.
+   * Không có → (Claude Code tương tác) tạo bản ghi mới từ khung trong `topDown`.
+   */
+  async submit(analysisId: string | undefined, raw: unknown): Promise<SubmitOutcome> {
+    raw = normalizeTfInput(raw);
+    const filled: string[] = [];
+    let rec: AnalysisRecord | null;
+    let plan: TfPlanEntry[];
+    const sub = (raw ?? {}) as { symbol?: string; primaryTf?: unknown; topDown?: { tf?: unknown }[] };
+
+    if (analysisId) {
+      rec = this.repo.get(analysisId);
+      if (!rec) return { ok: false, errors: ['analysisId không tồn tại'] };
+      if (rec.status !== 'RUNNING') return { ok: false, errors: [`Phân tích đã ở trạng thái ${rec.status}, không nhận thêm kết quả`] };
+      const p = buildTfPlan(rec.primaryTf, rec.tfs.filter(tf => tf !== rec!.primaryTf));
+      if (!p.ok) return { ok: false, errors: [p.error] };
+      plan = p.plan;
+      // symbol / primaryTf thừa khi đã có analysisId: thiếu thì điền từ yêu cầu (model nhỏ hay bỏ sót). Sai thì vẫn báo lỗi.
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const obj = raw as Record<string, unknown>;
+        const missing = (['symbol', 'primaryTf'] as const).filter(k => obj[k] === undefined || obj[k] === null || obj[k] === '');
+        if (missing.length) {
+          raw = { ...obj, ...(missing.includes('symbol') ? { symbol: rec.symbol } : {}), ...(missing.includes('primaryTf') ? { primaryTf: rec.primaryTf } : {}) };
+          filled.push(`Server điền ${missing.join(', ')} từ yêu cầu phân tích`);
+        }
+      }
+    } else {
+      const ctxTfs = (sub.topDown ?? []).map(t => t.tf).filter(tf => tf !== sub.primaryTf);
+      const p = buildTfPlan(sub.primaryTf, ctxTfs, this.opts.maxTfs);
+      if (!p.ok) return { ok: false, errors: [`topDown/primaryTf: ${p.error}`] };
+      plan = p.plan;
+      rec = null;
+    }
+
+    const symbol = rec?.symbol ?? normalizeSymbol(String(sub.symbol ?? ''));
+    const primaryTf = (rec?.primaryTf ?? sub.primaryTf) as Timeframe;
+    const tfs = new Set<Timeframe>([...plan.map(p => p.tf), ...referencedTfs(raw)]);
+    const candlesByTf: Partial<Record<Timeframe, Candle[]>> = {};
+    try {
+      await Promise.all(
+        [...tfs].map(async tf => {
+          const res = await this.klines.getKlines({ symbol, tf, limit: this.opts.validationBars ?? 1500, closedOnly: true });
+          candlesByTf[tf] = res.candles;
+        }),
+      );
+    } catch (err) {
+      return { ok: false, errors: [`Không tải được dữ liệu nến để kiểm tra: ${(err as Error).message}`] };
+    }
+
+    const outcome = validateSubmission(raw, { symbol, primaryTf, plan, candlesByTf, minRiskReward: this.opts.minRiskReward });
+    if (!outcome.ok) {
+      if (analysisId) this.emitStep(analysisId, `Kết quả bị từ chối (${outcome.errors.length} lỗi), agent đang sửa`);
+      return outcome;
+    }
+
+    const id = analysisId ?? randomUUID();
+    if (!rec) {
+      this.repo.create({ id, symbol, primaryTf, tfs: plan.map(p => p.tf), status: 'RUNNING', createdAt: Date.now(), runner: 'interactive' });
+    }
+    const result: AnalysisResult = {
+      ...outcome.value,
+      id,
+      createdAt: Date.now(),
+      tfs: plan.map(p => p.tf),
+      asOf: candlesByTf[primaryTf]?.at(-1)?.time ?? Math.floor(Date.now() / 1000),
+      model: this.models.get(id) ?? (analysisId ? rec?.runner : 'agent tương tác (Claude Code / agy)'),
+      warnings: [...filled, ...outcome.warnings],
+    };
+    this.finish(id, 'DONE', { result });
+    return { ok: true, analysisId: id, warnings: [...filled, ...outcome.warnings] };
+  }
+}
