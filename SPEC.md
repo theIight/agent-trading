@@ -146,7 +146,7 @@ API nội bộ `/internal/*`: chỉ localhost + header `x-wca-token` = nội dun
 | Phase | Dải nền dọc + nhãn trên vùng volume |
 | Mức giá | Price line nhãn ngắn (Hỗ trợ, Kháng cự, Creek, Ice, Vô hiệu, Mục tiêu) |
 | Dự đoán | Đường nét đứt tới tương lai; kịch bản xác suất cao nhất nét đậm; nhãn `tên xx%` |
-| Setup | Công cụ Long/Short cho từng setup: giữa vùng entry→TP xa nhất (xanh), →SL (đỏ), vùng entry (vàng, nếu là vùng), TP trung gian nét đứt, SL tinh chỉnh (nếu có) là đường đứt đỏ "SL 1m ≈" tại giữa vùng ∓ `estStopDistance`; từ `asOf` tới `validUntil` hoặc 25 nến. Setup `MARKET` của quyết định `ENTER` vẽ nét liền; setup đang chờ vẽ mờ, viền nét đứt, nhãn `Chờ hồi/Chờ phá vỡ <trigger>`. `STAND_ASIDE` không vẽ, trừ khi bật "Hiện setup tham khảo". Click thẻ setup ở panel → chỉ vẽ setup đó. Bản ghi cũ vẽ từ `action` |
+| Setup | Công cụ Long/Short cho từng setup: giữa vùng entry→TP xa nhất (xanh), →SL (đỏ), vùng entry (vàng, nếu là vùng), TP trung gian nét đứt, SL tinh chỉnh (nếu có) là đường đứt đỏ "SL 1m ≈" tại giữa vùng ∓ `estStopDistance`; từ `asOf` tới `validUntil` hoặc 25 nến, tối thiểu 12 nến khung đang xem. Nhiều setup → các cột cạnh nhau (setup chính bên trái, cách 1 nến) để không chồng; nhãn overlay tự giãn dọc để không đè nhau. Setup `MARKET` của quyết định `ENTER` vẽ nét liền; setup đang chờ vẽ mờ, viền nét đứt, nhãn `Chờ hồi/Chờ phá vỡ <trigger>`. `STAND_ASIDE` không vẽ, trừ khi bật "Hiện setup tham khảo". Click thẻ setup ở panel → chỉ vẽ setup đó. Bản ghi cũ vẽ từ `action` |
 
 * Mặc định ẩn mục của khung **nhỏ hơn** khung đang xem; mục của khung lớn hơn được snap về nến chứa nó.
 * `rightOffset` của time scale tự mở rộng để thấy hết phần tương lai.

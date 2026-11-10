@@ -224,7 +224,61 @@ function pushPositionTool(model: OverlayModel, p: PositionTool): void {
   });
 }
 
-const ENTRY_TYPE_LABEL = { MARKET: 'Vào ngay', LIMIT: 'Chờ hồi', STOP: 'Chờ phá vỡ' } as const;
+/** Độ rộng tối thiểu (số nến khung hiện tại) của mỗi công cụ Long/Short để nhãn đọc được. */
+export const MIN_TOOL_BARS = 12;
+
+/**
+ * Đảm bảo độ rộng tối thiểu; nhiều setup → chia thành các cột cạnh nhau (setup chính bên trái),
+ * cách nhau 1 nến, để hộp và nhãn không chồng lên nhau.
+ */
+function layoutPositionTools(tools: PositionTool[], barSec: number): void {
+  const n = tools.length;
+  if (!n) return;
+  const start = Math.min(...tools.map(t => t.t1));
+  const end = Math.max(...tools.map(t => t.t2));
+  const total = Math.max(end - start, n * MIN_TOOL_BARS * barSec + (n - 1) * barSec);
+  if (n === 1) {
+    tools[0]!.t2 = start + total;
+    return;
+  }
+  const col = (total - (n - 1) * barSec) / n;
+  tools.forEach((t, i) => {
+    t.t1 = start + i * (col + barSec);
+    t.t2 = t.t1 + col;
+  });
+}
+
+export interface LabelBox {
+  x: number;
+  y: number;
+  width: number;
+  align: 'left' | 'right' | 'center';
+}
+
+export const LABEL_HEIGHT = 12;
+
+/**
+ * Giãn nhãn theo chiều dọc để không đè nhau: nhãn sau trùng nhãn trước thì thử dịch xuống/lên
+ * từng bậc LABEL_HEIGHT (tối đa `maxSteps` bậc mỗi phía). Trả về y mới theo thứ tự đầu vào.
+ */
+export function layoutLabels(labels: readonly LabelBox[], maxSteps = 4): number[] {
+  const placed: { left: number; right: number; y: number }[] = [];
+  const hits = (left: number, right: number, y: number) =>
+    placed.some(p => left < p.right && right > p.left && Math.abs(y - p.y) < LABEL_HEIGHT);
+  return labels.map(l => {
+    const left = l.align === 'left' ? l.x : l.align === 'right' ? l.x - l.width : l.x - l.width / 2;
+    const right = left + l.width;
+    let y = l.y;
+    for (let step = 1; hits(left, right, y) && step <= maxSteps; step++) {
+      if (!hits(left, right, l.y + step * LABEL_HEIGHT)) y = l.y + step * LABEL_HEIGHT;
+      else if (!hits(left, right, l.y - step * LABEL_HEIGHT)) y = l.y - step * LABEL_HEIGHT;
+    }
+    placed.push({ left, right, y });
+    return y;
+  });
+}
+
+const ENTRY_TYPE_LABEL ={ MARKET: 'Vào ngay', LIMIT: 'Chờ hồi', STOP: 'Chờ phá vỡ' } as const;
 
 export function buildOverlayModel(
   analysis: AnalysisResult | null,
@@ -363,6 +417,7 @@ export function buildOverlayModel(
         });
       }
     }
+    layoutPositionTools(tools, curSec);
     for (const tool of tools) {
       maxTime = Math.max(maxTime, tool.t2);
       pushPositionTool(model, tool);

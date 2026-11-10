@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisResult, Candle, TradePlan, TradeSetup } from '@wca/shared';
-import { buildOverlayModel, makeTimeMapper, snapToBar, ALL_LAYERS_ON } from '../apps/web/src/overlays/model.ts';
+import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
 
 const H4 = 14400;
 const T0 = 1_790_000_000 - (1_790_000_000 % H4);
@@ -109,7 +109,7 @@ describe('buildOverlayModel', () => {
 
     it('setup chờ: nét đứt, vùng entry, kéo tới validUntil', () => {
       const m = buildOverlayModel(
-        withPlan({ decision: 'WAIT_FOR_SETUP', setups: [setup({ entryType: 'LIMIT', entryLow: 98, entryHigh: 100, stopLoss: 94, validUntil: last.time + 10 * H4 })] }),
+        withPlan({ decision: 'WAIT_FOR_SETUP', setups: [setup({ entryType: 'LIMIT', entryLow: 98, entryHigh: 100, stopLoss: 94, validUntil: last.time + 15 * H4 })] }),
         candles,
         '4h',
       );
@@ -117,7 +117,7 @@ describe('buildOverlayModel', () => {
       expect(m.rects.every(r => r.dashed)).toBe(true);
       expect(m.rects[0]!.label).toMatch(/^Chờ hồi LPS · LONG/);
       expect(m.rects[2]).toMatchObject({ top: 100, bottom: 98 });
-      expect(m.futureBars).toBe(10);
+      expect(m.futureBars).toBe(15);
     });
 
     it('STAND_ASIDE: không vẽ, trừ khi bật setup tham khảo', () => {
@@ -141,12 +141,69 @@ describe('buildOverlayModel', () => {
       expect(buildOverlayModel(withPlan({}), candles, '4h').lines.some(l => l.label?.startsWith('SL '))).toBe(false);
     });
 
+    it('độ rộng tối thiểu MIN_TOOL_BARS nến dù validUntil gần', () => {
+      const m = buildOverlayModel(
+        withPlan({ decision: 'WAIT_FOR_SETUP', setups: [setup({ entryType: 'LIMIT', validUntil: last.time + 2 * H4 })] }),
+        candles,
+        '4h',
+      );
+      expect(m.rects[0]!.t1).toBe(last.time);
+      expect(m.rects[0]!.t2 - m.rects[0]!.t1).toBe(MIN_TOOL_BARS * H4);
+    });
+
+    it('2 setup: 2 cột không giao nhau, setup chính bên trái, mỗi cột ≥ MIN_TOOL_BARS nến', () => {
+      const a = withPlan({
+        decision: 'WAIT_FOR_SETUP',
+        setups: [
+          setup({ direction: 'SHORT', entryType: 'LIMIT', stopLoss: 105, takeProfits: [90, 85], validUntil: last.time + 6 * H4 }),
+          setup({ direction: 'SHORT', entryType: 'STOP', stopLoss: 103, takeProfits: [85], validUntil: last.time + 6 * H4 }),
+        ],
+      });
+      const m = buildOverlayModel(a, candles, '4h');
+      const tp = m.rects.filter(r => r.label?.startsWith('Chờ'));
+      expect(tp).toHaveLength(2);
+      expect(tp[0]!.label).toMatch(/^Chờ hồi/);
+      expect(tp[0]!.t1).toBe(last.time);
+      expect(tp[0]!.t2).toBeLessThan(tp[1]!.t1);
+      for (const r of tp) expect(r.t2 - r.t1).toBeGreaterThanOrEqual(MIN_TOOL_BARS * H4);
+      // Đường TP trung gian theo cột của setup.
+      const tp1 = m.lines.find(l => l.label === 'TP1')!;
+      expect(tp1.points[0]!.time).toBe(tp[0]!.t1);
+      expect(m.futureBars).toBe(Math.ceil((tp[1]!.t2 - last.time) / H4));
+    });
+
     it('chọn 1 setup chỉ vẽ setup đó', () => {
       const a = withPlan({ decision: 'WAIT_FOR_SETUP', setups: [setup({ entryType: 'LIMIT' }), setup({ direction: 'SHORT', entryType: 'STOP', stopLoss: 105, takeProfits: [85] })] });
       expect(buildOverlayModel(a, candles, '4h').rects).toHaveLength(4);
       const one = buildOverlayModel(a, candles, '4h', { selectedSetup: 1 });
       expect(one.rects).toHaveLength(2);
-      expect(one.rects[0]).toMatchObject({ top: 100, bottom: 85 });
+      expect(one.rects[0]).toMatchObject({ top: 100, bottom: 85, t1: last.time });
+    });
+  });
+
+  describe('layoutLabels', () => {
+    const overlap = (a: { l: number; r: number; y: number }, b: { l: number; r: number; y: number }) =>
+      a.l < b.r && a.r > b.l && Math.abs(a.y - b.y) < LABEL_HEIGHT;
+
+    it('nhãn trùng vị trí được giãn ra, không còn đè', () => {
+      const labels = [
+        { x: 10, y: 100, width: 200, align: 'left' as const },
+        { x: 10, y: 100, width: 220, align: 'left' as const },
+        { x: 50, y: 104, width: 30, align: 'left' as const },
+      ];
+      const ys = layoutLabels(labels);
+      expect(ys[0]).toBe(100);
+      const boxes = labels.map((l, i) => ({ l: l.x, r: l.x + l.width, y: ys[i]! }));
+      expect(overlap(boxes[0]!, boxes[1]!)).toBe(false);
+      expect(overlap(boxes[0]!, boxes[2]!)).toBe(false);
+      expect(overlap(boxes[1]!, boxes[2]!)).toBe(false);
+    });
+
+    it('không đụng nhãn không giao theo chiều ngang', () => {
+      expect(layoutLabels([
+        { x: 10, y: 100, width: 50, align: 'left' },
+        { x: 200, y: 100, width: 50, align: 'right' },
+      ])).toEqual([100, 100]);
     });
   });
 

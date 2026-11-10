@@ -12,7 +12,7 @@ import type {
   Time,
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import { EMPTY_MODEL, type OverlayModel } from './model.ts';
+import { EMPTY_MODEL, layoutLabels, type LabelBox, type OverlayModel } from './model.ts';
 
 type TimeMapper = (time: number) => number | null;
 
@@ -27,7 +27,13 @@ interface Ctx {
 function xOf(ctx: Ctx, time: number): number | null {
   const logical = ctx.mapTime(time);
   if (logical === null) return null;
-  return ctx.chart.timeScale().logicalToCoordinate(logical as Logical);
+  // lightweight-charts (5.2) trả 0 cho logical không nguyên → nội suy giữa 2 chỉ số nguyên liền kề.
+  const ts = ctx.chart.timeScale();
+  const lo = Math.floor(logical);
+  const xLo = ts.logicalToCoordinate(lo as Logical);
+  if (xLo === null || logical === lo) return xLo;
+  const xHi = ts.logicalToCoordinate((lo + 1) as Logical);
+  return xHi === null ? xLo : xLo + (xHi - xLo) * (logical - lo);
 }
 
 function yOf(ctx: Ctx, price: number): number | null {
@@ -73,6 +79,15 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
   constructor(private readonly ctx: Ctx) {}
   draw(target: CanvasRenderingTarget2D): void {
     target.useMediaCoordinateSpace(({ context: c, mediaSize }) => {
+      // Nhãn vẽ sau cùng, đã giãn để không đè nhau.
+      c.font = FONT;
+      const labels: (LabelBox & { text: string; color: string })[] = [];
+      const addLabel = (text: string, x: number, y: number, color: string, align: 'left' | 'right') => {
+        const width = c.measureText(text).width;
+        // Giữ nhãn trong vùng nhìn thấy (hộp kéo dài ra ngoài mép phải).
+        const maxX = align === 'left' ? mediaSize.width - width - 4 : mediaSize.width - 4;
+        labels.push({ text, x: Math.min(x, Math.max(maxX, align === 'left' ? 4 : width + 4)), y, color, align, width });
+      };
       for (const r of this.ctx.model.rects) {
         const x1 = xOf(this.ctx, r.t1);
         const x2 = xOf(this.ctx, r.t2);
@@ -90,9 +105,9 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
         }
         if (r.label) {
           const at = r.labelAt ?? 'top-left';
-          const lx = at.endsWith('left') ? Math.max(x1, 0) + 6 : x2 - 6;
+          const lx = at.endsWith('left') ? Math.max(x1, 0) + 6 : Math.min(x2, mediaSize.width) - 6;
           const ly = at.startsWith('top') ? yTop + 9 : yBot - 9;
-          drawLabel(c, r.label, lx, ly, r.labelColor ?? this.ctx.textColor, at.endsWith('left') ? 'left' : 'right');
+          addLabel(r.label, lx, ly, r.labelColor ?? this.ctx.textColor, at.endsWith('left') ? 'left' : 'right');
         }
       }
 
@@ -121,10 +136,13 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
           c.font = FONT;
           const w = c.measureText(line.label).width;
           // Gần mép phải → đặt nhãn phía trên, căn phải tại điểm cuối để không bị cắt.
-          if (end.x + 6 + w > mediaSize.width) drawLabel(c, line.label, Math.min(end.x, mediaSize.width) - 4, end.y - 9, line.color, 'right');
-          else drawLabel(c, line.label, end.x + 6, end.y, line.color);
+          if (end.x + 6 + w > mediaSize.width) addLabel(line.label, Math.min(end.x, mediaSize.width) - 4, end.y - 9, line.color, 'right');
+          else addLabel(line.label, end.x + 6, end.y, line.color, 'left');
         }
       }
+
+      const ys = layoutLabels(labels);
+      labels.forEach((l, i) => drawLabel(c, l.text, l.x, ys[i]!, l.color, l.align));
     });
   }
 }
