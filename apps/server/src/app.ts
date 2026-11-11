@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import type { BookmapUiConfig } from '@wca/shared';
 import { AnalysisRepo } from './analysis/repo.ts';
 import { AnalysisService } from './analysis/service.ts';
 import { config, type AppConfig } from './config.ts';
@@ -91,6 +92,7 @@ export async function buildApp(deps: AppDeps = {}) {
     barsPerTf: cfg.agentBarsPerTf,
     screenshotDir: path.join(dataDir, 'screenshots'),
     minRiskReward: cfg.setupMinRr,
+    bookmap: { symbols: cfg.bookmapSymbols, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -109,6 +111,10 @@ export async function buildApp(deps: AppDeps = {}) {
     xauusdSource: cfg.xauusdSource,
     tiingoConfigured: Boolean(cfg.tiingoApiToken),
     agentMaxTfs: cfg.agentMaxTfs,
+    bookmap: {
+      symbols: cfg.bookmapSymbols,
+      offsets: Object.fromEntries(cfg.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
+    } satisfies BookmapUiConfig,
   }));
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);

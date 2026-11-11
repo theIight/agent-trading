@@ -13,6 +13,7 @@ interface Row {
   error: string | null;
   runner: string | null;
   model: string | null;
+  bookmap: number | null;
 }
 
 function toRecord(row: Row, withResult = true): AnalysisRecord {
@@ -24,6 +25,7 @@ function toRecord(row: Row, withResult = true): AnalysisRecord {
     status: row.status,
     runner: row.runner ?? 'claude-code',
     model: row.model ?? undefined,
+    ...(row.bookmap ? { bookmap: true } : {}),
     createdAt: row.created_at,
     finishedAt: row.finished_at ?? undefined,
     result: withResult && row.result ? (JSON.parse(row.result) as AnalysisResult) : undefined,
@@ -34,10 +36,10 @@ function toRecord(row: Row, withResult = true): AnalysisRecord {
 export class AnalysisRepo {
   constructor(private readonly db: Db) {}
 
-  create(rec: Pick<AnalysisRecord, 'id' | 'symbol' | 'primaryTf' | 'tfs' | 'status' | 'createdAt' | 'runner' | 'model'>): void {
+  create(rec: Pick<AnalysisRecord, 'id' | 'symbol' | 'primaryTf' | 'tfs' | 'status' | 'createdAt' | 'runner' | 'model' | 'bookmap'>): void {
     this.db
-      .prepare(`INSERT INTO analyses (id, symbol, primary_tf, tfs, status, created_at, runner, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(rec.id, rec.symbol, rec.primaryTf, JSON.stringify(rec.tfs), rec.status, rec.createdAt, rec.runner ?? null, rec.model ?? null);
+      .prepare(`INSERT INTO analyses (id, symbol, primary_tf, tfs, status, created_at, runner, model, bookmap) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+      .run(rec.id, rec.symbol, rec.primaryTf, JSON.stringify(rec.tfs), rec.status, rec.createdAt, rec.runner ?? null, rec.model ?? null, rec.bookmap ? 1 : null);
   }
 
   get(id: string): AnalysisRecord | null {

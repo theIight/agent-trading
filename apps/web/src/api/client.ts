@@ -1,4 +1,4 @@
-import type { AnalysisRecord, InstrumentInfo, KlinesResponse, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -6,6 +6,7 @@ export interface ServerConfig {
   supportedTfs: Timeframe[];
   defaultContextTfs: Timeframe[];
   agentMaxTfs: number;
+  bookmap?: BookmapUiConfig;
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -40,6 +41,7 @@ export function startAnalysis(body: {
   screenshot?: string;
   runner?: RunnerId;
   model?: string;
+  bookmap?: { htf?: string; ltf?: string; capturedAt?: number; offset?: number };
 }): Promise<AnalysisRecord> {
   return request('/api/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }

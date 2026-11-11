@@ -1,6 +1,8 @@
 import {
   BEARISH_EVENTS,
   BULLISH_EVENTS,
+  bookmapSizeUnit,
+  ORDERFLOW_KIND_LABELS,
   tfLabel,
   tfSeconds,
   type AnalysisResult,
@@ -10,8 +12,8 @@ import {
 
 // Chuyển AnalysisResult → mô hình vẽ (toạ độ thời gian/giá), độc lập với canvas để test được.
 
-export type LayerKey = 'events' | 'ranges' | 'phases' | 'levels' | 'forecast' | 'action';
-export const LAYER_KEYS: LayerKey[] = ['events', 'ranges', 'phases', 'levels', 'forecast', 'action'];
+export type LayerKey = 'events' | 'ranges' | 'phases' | 'levels' | 'forecast' | 'action' | 'orderflow';
+export const LAYER_KEYS: LayerKey[] = ['events', 'ranges', 'phases', 'levels', 'forecast', 'action', 'orderflow'];
 export const LAYER_LABELS: Record<LayerKey, string> = {
   events: 'Sự kiện',
   ranges: 'Trading Range',
@@ -19,10 +21,11 @@ export const LAYER_LABELS: Record<LayerKey, string> = {
   levels: 'Mức giá',
   forecast: 'Dự đoán',
   action: 'Setup',
+  orderflow: 'Order flow',
 };
 export type LayerVisibility = Record<LayerKey, boolean>;
 export const ALL_LAYERS_ON: LayerVisibility = {
-  events: true, ranges: true, phases: true, levels: true, forecast: true, action: true,
+  events: true, ranges: true, phases: true, levels: true, forecast: true, action: true, orderflow: true,
 };
 
 export const COLORS = {
@@ -40,6 +43,7 @@ export const COLORS = {
   entryZone: 'rgba(255,193,7,0.16)',
   entryZoneStroke: 'rgba(255,193,7,0.8)',
   entry: '#b2b5be',
+  orderflow: '#ab47bc',
   phaseFills: ['rgba(255,193,7,0.06)', 'rgba(156,39,176,0.06)', 'rgba(0,188,212,0.06)', 'rgba(76,175,80,0.06)', 'rgba(255,87,34,0.06)'],
 };
 
@@ -97,6 +101,8 @@ export interface PriceLineItem {
   color: string;
   title: string;
   style: 'solid' | 'dashed' | 'dotted';
+  /** Độ dày nét (mặc định 1). */
+  width?: 1 | 2 | 3;
 }
 
 export interface OverlayModel {
@@ -362,6 +368,28 @@ export function buildOverlayModel(
       const s = levelStyle[lv.kind] ?? { color: COLORS.neutral, style: 'dotted' as const };
       // Nhãn ngắn để không đè lên nến; ghi chú đầy đủ xem ở panel.
       model.priceLines.push({ price: lv.price, ...s, title: LEVEL_LABELS[lv.kind] ?? lv.kind });
+    }
+  }
+
+  if (layers.orderflow && analysis.orderflow) {
+    const levels = analysis.orderflow.levels.filter(lv => lv.price !== undefined);
+    // Độ dày theo size tương đối, chỉ so trong cùng ảnh + cùng nguồn (COB ≠ SVP).
+    const maxSize = new Map<string, number>();
+    for (const lv of levels) {
+      if (lv.size === undefined) continue;
+      const key = `${lv.image}:${lv.sizeSource}`;
+      maxSize.set(key, Math.max(maxSize.get(key) ?? 0, lv.size));
+    }
+    const unit = bookmapSizeUnit(analysis.symbol);
+    for (const lv of levels) {
+      let width: 1 | 2 | 3 = 1;
+      let sizeText = '';
+      if (lv.size !== undefined) {
+        const ratio = lv.size / (maxSize.get(`${lv.image}:${lv.sizeSource}`) ?? lv.size);
+        width = ratio >= 0.999 ? 3 : ratio >= 0.5 ? 2 : 1;
+        sizeText = ` · ${Number(lv.size.toFixed(2))}${unit ? ` ${unit}` : ''}`;
+      }
+      model.priceLines.push({ price: lv.price!, color: COLORS.orderflow, style: 'dotted', width, title: `BM ${ORDERFLOW_KIND_LABELS[lv.kind]}${sizeText}` });
     }
   }
 

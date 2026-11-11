@@ -37,6 +37,7 @@ export function openDb(dbPath: string): Db {
   for (const sql of MIGRATIONS) db.exec(sql);
   addColumnIfMissing(db, 'analyses', 'runner', 'TEXT');
   addColumnIfMissing(db, 'analyses', 'model', 'TEXT');
+  addColumnIfMissing(db, 'analyses', 'bookmap', 'INTEGER');
   return db;
 }
 

@@ -240,3 +240,35 @@ describe('buildOverlayModel', () => {
     expect(m.lines.map(l => l.label)).toEqual(['Creek']);
   });
 });
+
+describe('layer Order flow (Bookmap)', () => {
+  const orderflow: AnalysisResult['orderflow'] = {
+    lastPrices: [],
+    summary: 'Hấp thụ ở đáy',
+    cvd: '',
+    offset: 10,
+    levels: [
+      { kind: 'ASK_WALL', image: 'htf', bookmapPrice: 4078, price: 4068, size: 77, sizeSource: 'COB', strength: 0.8, note: '' },
+      { kind: 'BID_WALL', image: 'htf', bookmapPrice: 4060, price: 4050, size: 30, sizeSource: 'COB', strength: 0.5, note: '' },
+      { kind: 'POC', image: 'ltf', bookmapPrice: 4054.5, price: 4044.5, size: 8135, sizeSource: 'SVP', strength: 0.7, note: '' },
+      { kind: 'ABSORPTION', image: 'ltf', bookmapPrice: 4055, price: 4045, strength: 0.6, note: '' },
+    ],
+  };
+
+  it('vẽ price line tím kèm khối lượng; độ dày so trong cùng ảnh + nguồn', () => {
+    const m = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow }), candles, '4h');
+    const bm = m.priceLines.filter(p => p.title.startsWith('BM'));
+    expect(bm.map(p => [p.title, p.price, p.width])).toEqual([
+      ['BM Tường bán · 77 lot', 4068, 3],
+      ['BM Tường mua · 30 lot', 4050, 1],
+      ['BM POC · 8135 lot', 4044.5, 3],
+      ['BM Hấp thụ', 4045, 1],
+    ]);
+  });
+
+  it('tắt layer hoặc không có orderflow → không vẽ', () => {
+    const off = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow }), candles, '4h', { layers: { ...ALL_LAYERS_ON, orderflow: false } });
+    expect(off.priceLines.some(p => p.title.startsWith('BM'))).toBe(false);
+    expect(buildOverlayModel(analysis(), candles, '4h').priceLines.some(p => p.title.startsWith('BM'))).toBe(false);
+  });
+});

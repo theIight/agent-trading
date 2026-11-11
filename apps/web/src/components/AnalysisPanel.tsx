@@ -1,16 +1,28 @@
 import { useEffect, useState } from 'react';
 import {
+  BOOKMAP_IMAGE_ROLES,
+  bookmapInstrumentLabel,
+  bookmapSizeUnit,
+  ORDERFLOW_KIND_LABELS,
   SUPPORTED_TFS,
   sortTopDown,
   tfLabel,
   type AnalysisRecord,
   type AnalysisResult,
+  type BookmapImageRole,
+  type Orderflow,
   type Timeframe,
   type TradePlan,
   type TradeSetup,
 } from '@wca/shared';
 import { chartRegistry } from '../chart/chartRegistry.ts';
-import { useAnalysisStore, type StepLog } from '../store/useAnalysisStore.ts';
+import {
+  bookmapOffsetOf,
+  bookmapSupported,
+  readImageFile,
+  useAnalysisStore,
+  type StepLog,
+} from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 
 const MAX_TFS = 4;
@@ -23,14 +35,117 @@ const fmtDateTime = (sec: number) =>
 const BIAS_LABEL = { BULLISH: 'Tăng', BEARISH: 'Giảm', NEUTRAL: 'Trung lập' } as const;
 const biasClass = (b: string) => (b === 'BULLISH' ? 'up' : b === 'BEARISH' ? 'down' : 'muted');
 
+const ROLE_LABEL: Record<BookmapImageRole, string> = { htf: 'Khung lớn', ltf: 'Khung bé' };
+
+/** Ô chọn ảnh Bookmap: bấm chọn file, kéo thả, hoặc dán (Cmd+V) khi ô đang focus. */
+function BookmapSlot({ symbol, role, disabled }: { symbol: string; role: BookmapImageRole; disabled: boolean }) {
+  const img = useAnalysisStore(s => s.bookmapImages[symbol]?.[role]);
+  const setBookmapImage = useAnalysisStore(s => s.setBookmapImage);
+  const [err, setErr] = useState<string | null>(null);
+  const take = (file: File | null | undefined) => {
+    if (!file) return;
+    readImageFile(file).then(
+      i => {
+        setErr(null);
+        setBookmapImage(symbol, role, i);
+      },
+      (e: Error) => setErr(e.message),
+    );
+  };
+  const id = `bm-${role}`;
+  return (
+    <div
+      className={`bm-slot ${img ? 'has' : ''}`}
+      tabIndex={0}
+      onPaste={e => take([...e.clipboardData.files][0])}
+      onDragOver={e => e.preventDefault()}
+      onDrop={e => {
+        e.preventDefault();
+        take(e.dataTransfer.files[0]);
+      }}
+    >
+      <div className="bm-slot-head">
+        <b>{ROLE_LABEL[role]}</b>
+        {img && (
+          <button type="button" className="preset-x" disabled={disabled} onClick={() => setBookmapImage(symbol, role, null)} title="Bỏ ảnh">
+            ×
+          </button>
+        )}
+      </div>
+      {img ? (
+        <>
+          <img src={img.dataUrl} alt={`Bookmap ${ROLE_LABEL[role]}`} />
+          <div className="muted bm-meta">
+            {img.name} · {new Date(img.lastModified).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+          </div>
+        </>
+      ) : (
+        <label htmlFor={id} className="muted bm-empty">
+          Chọn / kéo thả / dán ảnh
+        </label>
+      )}
+      <input id={id} type="file" accept="image/png,image/jpeg" hidden disabled={disabled} onChange={e => take(e.target.files?.[0])} />
+      {err && <div className="down bm-meta">{err}</div>}
+    </div>
+  );
+}
+
+function BookmapControls({ symbol, disabled }: { symbol: string; disabled: boolean }) {
+  const state = useAnalysisStore();
+  const { useBookmap, setUseBookmap, setBookmapOffset, runners, runner } = state;
+  const runnerInfo = runners.find(r => r.id === runner);
+  if (!bookmapSupported(state, symbol)) return null;
+  const unsupported = runnerInfo ? !runnerInfo.supportsBookmap : false;
+  const offset = bookmapOffsetOf(state, symbol);
+  const defaultOffset = state.bookmapConfig?.offsets[symbol] ?? 0;
+  return (
+    <div className="bookmap">
+      <label className="check">
+        <input type="checkbox" checked={useBookmap && !unsupported} disabled={unsupported || disabled} onChange={e => setUseBookmap(e.target.checked)} />
+        Dùng ảnh Bookmap
+        {unsupported && <span className="muted"> (agent này không nhận ảnh Bookmap)</span>}
+      </label>
+      {useBookmap && !unsupported && (
+        <>
+          <div className="muted bm-meta">Bookmap: {bookmapInstrumentLabel(symbol)}</div>
+          <div className="bm-slots">
+            {BOOKMAP_IMAGE_ROLES.map(role => (
+              <BookmapSlot key={role} symbol={symbol} role={role} disabled={disabled} />
+            ))}
+          </div>
+          <label className="model-select">
+            <span className="muted">Offset</span>
+            <input
+              type="number"
+              step="0.1"
+              value={offset}
+              disabled={disabled}
+              onChange={e => setBookmapOffset(symbol, e.target.value === '' ? null : Number(e.target.value))}
+              title="Giá Bookmap − giá trên chart app"
+            />
+            {offset !== defaultOffset && (
+              <button type="button" className="chip ghost" disabled={disabled} onClick={() => setBookmapOffset(symbol, null)}>
+                Mặc định {defaultOffset}
+              </button>
+            )}
+          </label>
+          <div className="muted bm-meta">Giá app = giá Bookmap − offset</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function Controls() {
   const tf = useAppStore(s => s.tf);
   const { contextTfs, toggleContextTf, presets, applyPreset, savePreset, deletePreset, attachScreenshot, setAttachScreenshot, run, analyze, cancel } =
     useAnalysisStore();
-  const { runners, runner, runnerModels, loadRunners, setRunner, setRunnerModel } = useAnalysisStore();
+  const { runners, runner, runnerModels, loadRunners, loadConfig, setRunner, setRunnerModel } = useAnalysisStore();
+  const symbol = useAppStore(s => s.symbol);
   useEffect(() => {
     void loadRunners();
-  }, [loadRunners]);
+    void loadConfig();
+  }, [loadRunners, loadConfig]);
   const runnerInfo = runners.find(r => r.id === runner);
   const ctx = contextTfs.filter(t => t !== tf);
   const order = sortTopDown([tf, ...ctx]);
@@ -139,6 +254,8 @@ function Controls() {
         Gửi kèm ảnh chart cho agent
         {runnerInfo && !runnerInfo.supportsScreenshot && <span className="muted"> (agent này không nhận ảnh)</span>}
       </label>
+
+      <BookmapControls symbol={symbol} disabled={Boolean(run)} />
 
       {run ? (
         <button type="button" className="btn danger" onClick={() => void cancel()}>
@@ -297,6 +414,47 @@ function LegacyAction({ a }: { a: AnalysisResult }) {
   );
 }
 
+function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
+  const unit = bookmapSizeUnit(symbol);
+  const drift = of.measuredOffset !== undefined && of.offset !== undefined ? of.measuredOffset - of.offset : undefined;
+  return (
+    <div className="orderflow">
+      <p className="note">{of.summary}</p>
+      {of.cvd && (
+        <div className="note">
+          <b>CVD:</b> {of.cvd}
+        </div>
+      )}
+      {of.levels.length > 0 && (
+        <ul className="events">
+          {of.levels.map((lv, i) => (
+            <li key={i}>
+              <b>{ORDERFLOW_KIND_LABELS[lv.kind]}</b> {fmtPrice(lv.price)} <span className="muted">(Bookmap {fmtPrice(lv.bookmapPrice)} · {ROLE_LABEL[lv.image].toLowerCase()})</span>
+              {lv.size !== undefined && (
+                <span>
+                  {' '}
+                  · {Number(lv.size.toFixed(2))} {unit} <span className="muted">{lv.sizeSource}</span>
+                </span>
+              )}
+              {lv.note && <div className="note">{lv.note}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="muted note">
+        Offset dùng {of.offset ?? '—'}
+        {of.measuredOffset !== undefined && (
+          <>
+            {' '}
+            · đo được {of.measuredOffset}
+            {drift !== undefined && Math.abs(drift) > 0 && <> (lệch {drift > 0 ? '+' : ''}{Number(drift.toFixed(2))})</>}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | null }) {
   return (
     <section className="panel-section result">
@@ -323,6 +481,13 @@ function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | nul
 
       <div className="section-title">Setup</div>
       {a.tradePlan ? <TradePlanCard plan={a.tradePlan} /> : <LegacyAction a={a} />}
+
+      {a.orderflow && (
+        <>
+          <div className="section-title">Order flow (Bookmap)</div>
+          <OrderflowCard of={a.orderflow} symbol={a.symbol} />
+        </>
+      )}
 
       {a.scenarios.length > 0 && (
         <>
@@ -393,6 +558,11 @@ function History() {
               <b>{new Date(h.createdAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>{' '}
               <span className="muted">{h.tfs.map(t => tfLabel(t as Timeframe)).join(' → ')}</span>{' '}
               <span className="muted">· {runnerLabel(h)}</span>
+              {h.bookmap && (
+                <span className="badge bm" title="Có dùng ảnh Bookmap">
+                  BM
+                </span>
+              )}
             </div>
             {h.result ? (
               <div>

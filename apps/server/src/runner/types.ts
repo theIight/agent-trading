@@ -7,6 +7,8 @@ export interface AgentRunRequest {
   plan: TfPlanEntry[];
   barsPerTf: number;
   hasScreenshot: boolean;
+  /** Có ảnh Bookmap (order flow) → agent gọi get_bookmap_images. */
+  hasBookmap?: boolean;
   /** Model người dùng chọn; không có thì dùng mặc định của runner. */
   model?: string;
   /** Nguồn dữ liệu / loại volume của symbol (vàng OANDA: tick volume). */
@@ -35,6 +37,8 @@ export interface AgentRunner {
   readonly label: string;
   readonly defaultModel?: string;
   readonly supportsScreenshot: boolean;
+  /** Nhận được ảnh Bookmap qua MCP. */
+  readonly supportsBookmap: boolean;
   /** Binary có chạy được không (kiểm tra lần đầu rồi nhớ). */
   availability(): { available: boolean; reason?: string };
   listModels(): Promise<RunnerModel[]>;

@@ -21,6 +21,14 @@ Mặc định (`XAUUSD_SOURCE=tiingo-okx`): **giá vàng giao ngay từ Tiingo +
 
 Phương án khác: `XAUUSD_SOURCE=oanda` (cần `OANDA_API_TOKEN`, `OANDA_ENV=practice|live`, volume = tick volume) hoặc `XAUUSD_SOURCE=binance` (XAUUSDT perp).
 
+## Bookmap (order flow, XAUUSD / BTCUSDT)
+
+Tick **"Dùng ảnh Bookmap"** trong panel phân tích rồi chọn/dán 2 ảnh: khung lớn và khung bé. Agent đọc COB, SVP, heatmap, bong bóng, CVD làm bằng chứng xác nhận (không đổi bối cảnh khung lớn, không đổi entry/SL/TP). Mức giá vẽ ở layer "Order flow".
+
+- Vàng trên Bookmap là **GC futures**, cao hơn XAUUSD spot: giá app = giá Bookmap − offset. Offset mặc định `BOOKMAP_OFFSET_XAUUSD=10` (BTC `0`), sửa được trên form. Khi roll hợp đồng (GCZ → GCG…) offset tăng — cập nhật lại.
+- Giá cuối trên ảnh lệch so với giá app lúc chụp quá `BOOKMAP_TOLERANCE_<SYMBOL>` (vàng 3, BTC 60) → cảnh báo **ảnh có thể đã cũ**. Ảnh chụp quá `BOOKMAP_MAX_AGE_MIN` (30) phút → cảnh báo.
+- `BOOKMAP_SYMBOLS` (mặc định `XAUUSD,BTCUSDT`).
+
 ## Chạy
 
 ```bash

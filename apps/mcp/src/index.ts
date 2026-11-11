@@ -142,6 +142,42 @@ server.registerTool(
 );
 
 server.registerTool(
+  'get_bookmap_images',
+  {
+    title: 'Ảnh Bookmap (order flow)',
+    description:
+      'Ảnh Bookmap người dùng gửi (chỉ XAUUSD / BTCUSDT): htf = khung lớn (zoom rộng), ltf = khung bé. Gồm heatmap thanh khoản, COB (sổ lệnh), SVP (volume profile), ' +
+      'bong bóng lệnh market lớn, CVD. Giá trên ảnh là giá Bookmap (vàng = GC futures, cao hơn spot một khoản offset): ghi bookmapPrice đúng như trên ảnh, server tự quy đổi. ' +
+      'Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
+    inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
+  },
+  async ({ analysisId: idArg }) => {
+    try {
+      const analysisId = resolveParam(idArg, 'analysisId');
+      const res = await call<{
+        symbol: string;
+        meta: { offset: number; instrument: string; capturedAt: number; refPrice?: number | null };
+        images: { role: 'htf' | 'ltf'; mimeType: string; data: string }[];
+      }>(`/internal/analyses/${encodeURIComponent(analysisId)}/bookmap`);
+      const m = res.meta;
+      const header =
+        `Bookmap ${res.symbol} — ${m.instrument}. Offset = ${m.offset} (giá app = giá Bookmap − ${m.offset}). ` +
+        `Chụp lúc ${new Date(m.capturedAt * 1000).toISOString()}${m.refPrice != null ? `, giá app lúc đó ${m.refPrice}` : ''}. ` +
+        `Dùng mức Bookmap cho entry/SL/TP/levels thì PHẢI trừ offset (vd ${m.offset ? `Bookmap X → chart X − ${m.offset}` : 'offset 0: giữ nguyên'}); chỉ orderflow.levels[].bookmapPrice và lastPrices giữ số trên ảnh. ` +
+        'Timestamp góc dưới trái ảnh là vị trí con trỏ, không phải giờ chụp. Đoạn giá đi ngang phẳng = Bookmap không ghi dữ liệu.';
+      const content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[] = [{ type: 'text', text: header }];
+      for (const img of res.images) {
+        content.push({ type: 'text', text: img.role === 'htf' ? 'Ảnh htf (khung lớn):' : 'Ảnh ltf (khung bé):' });
+        content.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+      }
+      return { content };
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  },
+);
+
+server.registerTool(
   'submit_analysis',
   {
     title: 'Nộp kết quả',

@@ -6,3 +6,4 @@ export * from './runners.ts';
 export * from './normalize.ts';
 export * from './submissionExample.ts';
 export * from './instruments.ts';
+export * from './bookmap.ts';

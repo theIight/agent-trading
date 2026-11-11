@@ -35,6 +35,8 @@ export function describeToolUse(name: string, input: Record<string, unknown> = {
       return `Tính cấu trúc / climax / range ${tf}`;
     case 'get_chart_screenshot':
       return 'Xem ảnh chart';
+    case 'get_bookmap_images':
+      return 'Xem ảnh Bookmap (order flow)';
     case 'submit_analysis':
       return 'Nộp kết quả phân tích';
     default:

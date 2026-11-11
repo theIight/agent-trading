@@ -1,6 +1,10 @@
 import {
   analysisSubmissionSchema,
   levelSchema,
+  ORDERFLOW_LEVEL_KINDS,
+  ORDERFLOW_SIZE_SOURCES,
+  orderflowLevelSchema,
+  orderflowSchema,
   phaseSpanSchema,
   REFINED_TRIGGERS,
   refinedEntrySchema,
@@ -40,6 +44,8 @@ const OBJECTS: [string, AnyObject][] = [
   ['tradePlan', tradePlanSchema as unknown as AnyObject],
   ['tradePlan.setups[]', tradeSetupSchema as unknown as AnyObject],
   ['setups[].refinedEntry', refinedEntrySchema as unknown as AnyObject],
+  ['orderflow (chỉ khi có ảnh Bookmap)', orderflowSchema as unknown as AnyObject],
+  ['orderflow.levels[]', orderflowLevelSchema as unknown as AnyObject],
 ];
 
 export const REQUIRED_FIELDS_TEXT = OBJECTS.map(([name, s]) => `- ${name}: ${requiredKeys(s).join(', ')}`).join('\n');
@@ -60,6 +66,7 @@ export const SUBMIT_FORMAT_APPENDIX = [
   '- topDown[].role: HTF, PRIMARY, LTF. levels[].kind: SUPPORT, RESISTANCE, CREEK, ICE, INVALIDATION, TARGET.',
   '- tradePlan.decision: ENTER, WAIT_FOR_SETUP, STAND_ASIDE. setups[].direction: LONG, SHORT. setups[].entryType: MARKET, LIMIT, STOP.',
   `- setups[].trigger: ${SETUP_TRIGGERS.join(', ')}. refinedEntry.trigger: ${REFINED_TRIGGERS.join(', ')}`,
+  `- orderflow.levels[].kind: ${ORDERFLOW_LEVEL_KINDS.join(', ')}. image / lastPrices[].image: htf, ltf. sizeSource: ${ORDERFLOW_SIZE_SOURCES.join(', ')}. Không gửi price/offset/measuredOffset (server tự tính).`,
   '- summary ≥ 80 ký tự, mỗi topDown[].note ≥ 15 ký tự, tradePlan.reason ≥ 20 ký tự; không dùng placeholder ("test", "todo"…). schematic khác UNCLEAR thì events phải có ít nhất 1 phần tử.',
   '',
   '### Ví dụ cấu trúc (KHÔNG chép giá trị — mọi time/giá/nội dung phải lấy từ dữ liệu thật của bạn)',
@@ -69,7 +76,7 @@ export const SUBMIT_FORMAT_APPENDIX = [
 ].join('\n');
 
 /** Khung JSON điền sẵn cho đúng lượt chạy: agent chỉ việc thay các chỗ <...>. */
-export function buildAgySkeleton(req: Pick<AgentRunRequest, 'analysisId' | 'symbol' | 'primaryTf' | 'plan'>): string {
+export function buildAgySkeleton(req: Pick<AgentRunRequest, 'analysisId' | 'symbol' | 'primaryTf' | 'plan' | 'hasBookmap'>): string {
   const skeleton = {
     analysisId: req.analysisId,
     analysis: {
@@ -88,13 +95,23 @@ export function buildAgySkeleton(req: Pick<AgentRunRequest, 'analysisId' | 'symb
       scenarios: ['<{name, probability, bias, path:[{time, price}…], trigger, invalidation, note}>'],
       tradePlan: { decision: '<ENTER|WAIT_FOR_SETUP|STAND_ASIDE>', reason: '<≥ 20 ký tự>', reconsiderWhen: '<bắt buộc nếu STAND_ASIDE>', setups: ['<0–2 setup>'] },
       tfConflicts: [],
+      ...(req.hasBookmap
+        ? {
+            orderflow: {
+              lastPrices: ['<{image: htf|ltf, bookmapPrice: giá cuối trên ảnh}>'],
+              summary: '<nhận xét order flow tiếng Việt>',
+              levels: ['<{kind, image, bookmapPrice, size?, sizeSource?, strength, note}>'],
+              cvd: '<diễn biến CVD>',
+            },
+          }
+        : {}),
     },
   };
   return JSON.stringify(skeleton, null, 1);
 }
 
 /** Nhắc lại ràng buộc của lần chạy + khung điền sẵn + checklist trước khi nộp. */
-export function buildAgyPromptSuffix(req: Pick<AgentRunRequest, 'analysisId' | 'symbol' | 'primaryTf' | 'plan' | 'barsPerTf'>): string {
+export function buildAgyPromptSuffix(req: Pick<AgentRunRequest, 'analysisId' | 'symbol' | 'primaryTf' | 'plan' | 'barsPerTf' | 'hasBookmap'>): string {
   return [
     '',
     `Đọc get_features + get_klines với limit ${req.barsPerTf} cho TỪNG khung trước khi nộp; chỉ nộp một lần khi đã hoàn tất.`,

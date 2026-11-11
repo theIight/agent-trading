@@ -25,7 +25,18 @@ function runnerList(name: string, fallback: RunnerId[]): RunnerId[] {
   return list.length ? list : fallback;
 }
 
-const defaultTf = (process.env.DEFAULT_TF ?? '4h').toLowerCase();
+/** Giá trị số theo symbol từ env `<PREFIX><SYMBOL>`, gộp với mặc định; symbol khác chỉ lấy được qua env. */
+function symbolNums(prefix: string, defaults: Record<string, number>): Record<string, number> {
+  const out = { ...defaults };
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith(prefix) || !raw) continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) out[key.slice(prefix.length).toUpperCase()] = n;
+  }
+  return out;
+}
+
+const defaultTf =(process.env.DEFAULT_TF ?? '4h').toLowerCase();
 
 export const config = {
   host: process.env.HOST ?? '127.0.0.1',
@@ -69,6 +80,14 @@ export const config = {
   okxVolumeInst: process.env.OKX_VOLUME_INST || 'XAU-USDT-SWAP',
   /** Chu kỳ poll realtime cho nguồn không có WebSocket (OANDA). */
   livePollMs: int('LIVE_POLL_MS', 2000),
+  /** Symbol được gửi kèm ảnh Bookmap (order flow). */
+  bookmapSymbols: (process.env.BOOKMAP_SYMBOLS ?? 'XAUUSD,BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Offset mặc định = giá Bookmap − giá app (vàng: GC futures cao hơn spot), theo `BOOKMAP_OFFSET_<SYMBOL>`. */
+  bookmapOffsets: symbolNums('BOOKMAP_OFFSET_', { XAUUSD: 10, BTCUSDT: 0 }),
+  /** Ngưỡng lệch offset (đơn vị giá) để cảnh báo ảnh cũ, theo `BOOKMAP_TOLERANCE_<SYMBOL>`. */
+  bookmapTolerances: symbolNums('BOOKMAP_TOLERANCE_', { XAUUSD: 3, BTCUSDT: 60 }),
+  /** Ảnh chụp cũ hơn số phút này so với lúc gửi → cảnh báo. */
+  bookmapMaxAgeMin: int('BOOKMAP_MAX_AGE_MIN', 30),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

@@ -122,6 +122,7 @@ export class AgyRunner implements AgentRunner {
   readonly id = 'agy' as const;
   readonly label = 'Antigravity';
   readonly supportsScreenshot = true;
+  readonly supportsBookmap = true;
   private avail: { available: boolean; reason?: string } | null = null;
   private modelsCache: { at: number; models: RunnerModel[] } | null = null;
 

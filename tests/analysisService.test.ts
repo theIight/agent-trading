@@ -30,6 +30,7 @@ type Behavior = (req: AgentRunRequest, hooks: AgentRunHooks, service: AnalysisSe
 class FakeRunner implements AgentRunner {
   readonly label: string;
   readonly supportsScreenshot = true;
+  readonly supportsBookmap = true;
   service!: AnalysisService;
   lastReq: AgentRunRequest | null = null;
   constructor(

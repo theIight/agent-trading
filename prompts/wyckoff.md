@@ -14,7 +14,7 @@ Kết quả của bạn được **vẽ trực tiếp lên chart** cho người 
    - Bias và cấu trúc của **khung lớn quyết định bối cảnh**. Khung nhỏ hơn chỉ dùng để **xác nhận** và **tìm điểm vào / điều kiện kích hoạt**.
    - Không đảo ngược kết luận của khung lớn dựa trên khung nhỏ, trừ khi khung lớn đã thực sự phá cấu trúc (đóng cửa vượt biên range / CHoCH trên khung lớn). Khi đó phải nêu rõ lý do.
    - Khung nhỏ mâu thuẫn khung lớn → ưu tiên khung lớn, ghi mâu thuẫn vào `tfConflicts`, giảm `confidence`, và không vào lệnh ngược khung lớn.
-4. Nếu có ảnh chart (`get_chart_screenshot`), chỉ dùng để đối chiếu trực quan. Toạ độ vẫn phải lấy từ dữ liệu số.
+4. Nếu có ảnh chart (`get_chart_screenshot`), chỉ dùng để đối chiếu trực quan. Toạ độ vẫn phải lấy từ dữ liệu số. Nếu có ảnh Bookmap (`bookmap` khác null), làm theo mục "Bookmap (order flow)".
 5. **Lập trade plan** (mục "Setup giao dịch" bên dưới) sau khi đã có kết luận top-down.
 
 # Kiến thức Wyckoff cần áp dụng
@@ -37,6 +37,26 @@ Chung cho vàng:
 - Thị trường **đóng cửa cuối tuần** (≈ 17:00 thứ 6 → 17:00 Chủ nhật giờ New York): không có nến cuối tuần. Nến đầu tuần có thể **gap** — gap không tự nó là Spring/UT/SOS; cần hành vi giá + volume sau đó xác nhận.
 - Volume và biên độ cao nhất ở phiên London (≈ 07:00–16:00 UTC) và New York (≈ 12:00–21:00 UTC); nến phiên Á thường hẹp, volume thấp — đừng đọc "cạn cung/cầu" chỉ vì phiên Á yên ắng.
 - Phản ứng mạnh quanh tin vĩ mô Mỹ (CPI, NFP, FOMC): climax do tin cần được test lại mới có ý nghĩa Wyckoff.
+
+# Bookmap (order flow) — chỉ khi `get_analysis_request.bookmap` khác null
+
+Người dùng gửi ảnh Bookmap: `htf` (khung lớn, zoom rộng vài giờ) và/hoặc `ltf` (khung bé, zoom hẹp). Gọi `get_bookmap_images` **sau khi** đã kết luận khung lớn từ nến.
+
+- **Vai trò**: chỉ là **bằng chứng xác nhận** cho khung nhỏ / điểm vào. Ảnh chỉ phủ vài giờ nên **không** đổi bối cảnh khung lớn. Không dùng Bookmap để biện minh cho kết luận đã có sẵn — nếu order flow mâu thuẫn, nói rõ và giảm `confidence`.
+- **Đọc gì**:
+  - Cột **COB** (bên phải trục giá): lệnh chờ hiện tại theo mức giá — tường bán (đỏ, trên giá) / tường mua (xanh, dưới giá).
+  - Cột **SVP**: volume đã khớp trong phiên — POC (mức lớn nhất), HVN / LVN.
+  - **Heatmap**: dải sáng nằm ngang lâu = thanh khoản lớn treo lâu. Có thể bị rút (spoof): chỉ tin hơn khi giá chạm và dải vẫn còn.
+  - **Bong bóng**: lệnh market lớn (xanh = mua chủ động, đỏ = bán chủ động). Bong bóng lớn mà giá không đi tiếp = **hấp thụ** (nỗ lực không có kết quả).
+  - **CVD** (panel dưới): phân kỳ với giá. Ví dụ Spring: bán chủ động mạnh ở đáy, giá không xuống thêm, CVD quay lên.
+- **Áp vào Wyckoff**: xác nhận Spring/UT/Test (hấp thụ ở biên range), SOS/SOW (lệnh chủ động đẩy giá qua tường), đặt SL **ngoài** vùng thanh khoản dày, TP **trước** tường lệnh / tại POC. Được nhắc mức Bookmap trong `rationale` / `triggerNote`, nhưng entry/SL/TP vẫn lấy từ dữ liệu nến.
+- **Quy đổi giá — lỗi hay gặp nhất**: giá trên ảnh Bookmap ≠ giá chart (vàng: GC futures cao hơn spot `offset` giá). Khi dùng một mức Bookmap cho **entry / SL / TP / levels / scenarios** hoặc nhắc trong văn bản, **phải** dùng giá app = `bookmapPrice − offset` (vd offset 10: tường 4078 trên Bookmap → TP *dưới* 4068 trên chart). Chỉ riêng `orderflow.levels[].bookmapPrice` và `orderflow.lastPrices` giữ nguyên số trên ảnh.
+- **Cảnh báo**: timestamp góc dưới trái ảnh là vị trí con trỏ, không phải giờ chụp. Đoạn giá đi ngang phẳng = Bookmap không ghi dữ liệu (không phải "không có thanh khoản"). Đọc số nhỏ dễ sai — chỉ ghi mức đọc rõ.
+- **Nộp `orderflow`**:
+  - `lastPrices`: giá cuối (ô giá hiện tại có viền, cạnh đường nét đứt) của **từng** ảnh — server dùng để phát hiện ảnh cũ.
+  - `levels` (≤ 12): `bookmapPrice` **đúng như số trên trục Bookmap, không tự trừ offset**; `size` + `sizeSource` (`COB` / `SVP` / `BUBBLE`) chỉ khi có số in trên ảnh, **không ước từ màu heatmap**; `strength` 0..1; `note` ngắn.
+  - `summary`: 1–3 câu tiếng Việt; `cvd`: diễn biến CVD.
+  - Không gửi `price`, `offset`, `measuredOffset` — server tự tính.
 
 # Quy tắc toạ độ (validator sẽ kiểm tra)
 

@@ -44,6 +44,7 @@
 | `tradePlan` | `{decision ∈ ENTER/WAIT_FOR_SETUP/STAND_ASIDE, reason, reconsiderWhen, setups[≤2]}` — xem 3.1 |
 | `action` | Không do agent gửi (bị bỏ qua + warning). Server suy ra từ `tradePlan` để tương thích bản ghi cũ |
 | `tfConflicts[]` | Mâu thuẫn giữa các khung |
+| `orderflow?` | Chỉ khi phân tích có ảnh Bookmap — xem 3.2 |
 
 `AnalysisResult` = submission + `{id, createdAt, tfs (top-down), asOf (nến đóng cuối của khung chính), model?, warnings[]}`; `action` luôn có, `tradePlan` thiếu ở bản ghi cũ.
 
@@ -54,6 +55,14 @@
 * `refinedEntry?` (SL tầng 2, ước lượng): `{tf ≤ khung chính, trigger ∈ REFINED_TRIGGERS (SETUP_TRIGGERS + CHOCH), condition, stopRule, estStopDistance (đơn vị giá), atr?, riskReward?, riskRewardTp1?}` — khi giá vào vùng entry, chờ tín hiệu khung nhỏ, SL sau đỉnh/đáy tín hiệu + đệm ATR. Không thay thế `stopLoss` cấu trúc.
 * `MARKET` = giá đang ở vùng entry; `LIMIT` = chờ hồi về (LONG vùng dưới giá, SHORT vùng trên); `STOP` = chờ phá vỡ (LONG vùng trên giá, SHORT vùng dưới).
 * `action` suy ra: `ENTER` → LONG/SHORT của setup chính (entry = giữa vùng); `WAIT_FOR_SETUP` → `WAIT` kèm mức giá setup chính; `STAND_ASIDE` → `WAIT` không mức giá, `condition` = lý do + điều kiện xem lại.
+
+### 3.2 Order flow (Bookmap)
+
+* Chỉ symbol trong `BOOKMAP_SYMBOLS` (mặc định `XAUUSD,BTCUSDT`). Ảnh `htf` = khung lớn (zoom rộng), `ltf` = khung bé.
+* `orderflow = {lastPrices[≤2]{image, bookmapPrice}, summary, levels[≤12], cvd, offset?, measuredOffset?}`.
+* `levels[] = {kind ∈ ASK_WALL/BID_WALL/POC/HVN/LVN/ABSORPTION/AGGRESSION, image ∈ htf/ltf, bookmapPrice, price?, size?, sizeSource? ∈ COB/SVP/BUBBLE, strength, note}`. Agent ghi `bookmapPrice` đúng như trên trục Bookmap; `size` chỉ khi có số in trên ảnh.
+* **Server điền** `price = bookmapPrice − offset`, `offset`, `measuredOffset` (giá agent tự quy đổi bị ghi đè). Vàng: Bookmap chạy GC futures COMEX, cao hơn XAUUSD spot (basis).
+* Order flow là bằng chứng xác nhận: **không** làm đổi entry/SL/TP hay R:R.
 
 ## 4. Validator (`apps/server/src/validate`)
 
@@ -79,14 +88,21 @@ Tự sửa + ghi `warnings`:
   * `validUntil ≤ asOf` → bỏ trường; `scenario` không khớp tên kịch bản → bỏ trường. Setup ngược bias khung HTF → chỉ cảnh báo.
   * Hạ cấp: `ENTER` không còn setup `MARKET` → `WAIT_FOR_SETUP` (còn setup) hoặc `STAND_ASIDE`; `WAIT_FOR_SETUP` hết setup → `STAND_ASIDE` (tự điền `reconsiderWhen` nếu trống). `STAND_ASIDE` giữ setup làm tham khảo. `ENTER` đưa setup `MARKET` lên đầu.
 
+* Order flow (`validate/orderflow.ts`):
+  * Không có ảnh Bookmap mà vẫn nộp → bỏ + warning. Có ảnh mà không nộp → warning.
+  * Mức của ảnh không được gửi → bỏ. `price` quy đổi ngoài `[min low, max high]` của 300 nến khung chính gần nhất ± 3 × ATR14 → bỏ. `size` thiếu `sizeSource` → bỏ `size`.
+  * Ảnh cũ: `refPrice` = close nến 1m chứa `capturedAt` (lấy một lần, lưu vào meta). `measuredOffset = giá cuối (ưu tiên ảnh ltf) − refPrice`. `|giá cuối − refPrice − offset| > BOOKMAP_TOLERANCE_<SYMBOL>` → warning "có thể đã cũ" (vẫn quy đổi bằng offset cấu hình). Ảnh chụp cách lúc gửi > `BOOKMAP_MAX_AGE_MIN` (30) phút → warning. Thiếu `lastPrices` / `refPrice` → warning không kiểm tra được.
+  * Giá entry/SL/TP của setup trùng `bookmapPrice` (chưa quy đổi) của một mức trong ±0.02 × ATR14 khung chính nhưng không trùng giá đã quy đổi → warning "trùng giá Bookmap CHƯA quy đổi" (không tự sửa setup; bỏ qua khi |offset| ≤ 0.04 × ATR).
+
 ## 5. Điều phối phân tích (`apps/server/src/analysis`)
 
 * `POST /api/analyses {symbol, primaryTf, contextTfs[], screenshot?, runner?, model?}` → bản ghi `RUNNING` (lưu `runner`, `model`), đưa vào hàng đợi; **chạy tuần tự 1 job/lần** cho mọi agent. `runner` ∈ `AGENT_RUNNERS` (mặc định `AGENT_RUNNER`), không bật / binary không chạy được → 400. `model` khớp `^[\w.:/-]{1,80}$`, rỗng = mặc định của runner. `screenshot` là data URL PNG, lưu `data/screenshots/<id>.png`.
+* `bookmap? {htf?, ltf?, capturedAt?, offset?}` (data URL PNG/JPEG, ≥ 1 ảnh): symbol ngoài `BOOKMAP_SYMBOLS`, runner `supportsBookmap = false`, thiếu ảnh hoặc sai định dạng → 400. `capturedAt` (unix giây, UI lấy `File.lastModified` của ảnh cũ nhất; thiếu/tương lai → lúc gửi). `offset` thiếu → `BOOKMAP_OFFSET_<SYMBOL>` (XAUUSD 10, BTCUSDT 0). Lưu `data/screenshots/<id>-bookmap-{htf,ltf}.{png,jpg}` + `<id>-bookmap.json` (meta). Bản ghi có `bookmap: true` (cột `analyses.bookmap`).
 * Trạng thái: `RUNNING → DONE | FAILED | CANCELED`. Agent thoát mà chưa nộp hợp lệ → `FAILED`. Server khởi động lại → mọi `RUNNING` cũ thành `FAILED`.
 * `POST /api/analyses/:id/cancel` hủy job đang chạy (SIGTERM, sau 3s SIGKILL) hoặc đang chờ.
 * SSE: `/api/analyses/:id/stream` (step/text/status/result của 1 phân tích), `/api/events` (status/result mọi phân tích). Heartbeat 15s.
 * `GET /api/analyses?symbol` (danh sách gọn), `GET /api/analyses/:id` (đầy đủ).
-* `GET /api/runners` → `{defaultRunner, runners: RunnerInfo[]}` (`id, label, available, reason?, defaultModel?, models[], supportsScreenshot`). Bản ghi cũ không có `runner` coi là `claude-code`; kết quả từ Claude Code / agy tương tác có `runner: 'interactive'`. `result.model` = `<runner> · <model>`.
+* `GET /api/runners` → `{defaultRunner, runners: RunnerInfo[]}` (`id, label, available, reason?, defaultModel?, models[], supportsScreenshot, supportsBookmap`). Bản ghi cũ không có `runner` coi là `claude-code`; kết quả từ Claude Code / agy tương tác có `runner: 'interactive'`. `result.model` = `<runner> · <model>`.
 
 ## 6. Agent runner
 
@@ -117,10 +133,11 @@ agy -p <user prompt> --agent wyckoff-analyst --output-format stream-json
 
 | Tool | Mô tả |
 |---|---|
-| `get_analysis_request(analysisId)` | symbol, khung chính, `topDownOrder`, `barsPerTf`, `hasScreenshot`, `lastClose` (khung chính, nến đã đóng), `minRiskReward` |
+| `get_analysis_request(analysisId)` | symbol, khung chính, `topDownOrder`, `barsPerTf`, `hasScreenshot`, `lastClose` (khung chính, nến đã đóng), `minRiskReward`, `bookmap` (`{images, instrument, offset, capturedAt, refPrice, note}` hoặc null) |
 | `get_klines(symbol, tf, limit?=300, endTime?)` | CSV `i,time_utc,unix,open,high,low,close,volume`, chỉ nến đã đóng. `tf` nhận chữ hoa; `limit` < 100 tự nâng lên 100 (ghi chú ở dòng đầu) |
 | `get_features(symbol, tf, limit?, endTime?)` | ATR14, trend, swings (40 gần nhất), BOS/CHoCH (15), climax (20), range candidates — chỉ số `i` khớp `get_klines` cùng tham số |
 | `get_chart_screenshot(analysisId)` | Ảnh PNG nếu có |
+| `get_bookmap_images(analysisId)` | Dòng mô tả (instrument, offset, giờ chụp, giá app lúc chụp) + từng ảnh Bookmap kèm nhãn htf/ltf (`/internal/analyses/:id/bookmap`) |
 | `submit_analysis(analysisId?, analysis)` | Validate + lưu; không có `analysisId` → tạo bản ghi mới (agent tương tác). `analysis` = union(schema đầy đủ, object bất kỳ) để server trả đủ lỗi một lần; thiếu wrapper `analysis` thì gom các trường ở cấp ngoài |
 
 Ngữ cảnh lượt chạy: runner đặt env `WCA_ANALYSIS_ID`, `WCA_SYMBOL`, `WCA_PRIMARY_TF` cho MCP (Claude: env tiến trình `claude`; agy: `env` trong `mcp_config.json` của workspace). Khi agent bỏ sót, `analysisId` (get_analysis_request, get_chart_screenshot, submit_analysis) và `symbol` (get_klines, get_features) lấy từ env; phiên tương tác không có env → thiếu tham số là lỗi tiếng Việt. Có `WCA_ANALYSIS_ID` thì `submit_analysis` luôn gắn vào lượt đang chạy.
@@ -148,5 +165,9 @@ API nội bộ `/internal/*`: chỉ localhost + header `x-wca-token` = nội dun
 | Dự đoán | Đường nét đứt tới tương lai; kịch bản xác suất cao nhất nét đậm; nhãn `tên xx%` |
 | Setup | Công cụ Long/Short cho từng setup: giữa vùng entry→TP xa nhất (xanh), →SL (đỏ), vùng entry (vàng, nếu là vùng), TP trung gian nét đứt, SL tinh chỉnh (nếu có) là đường đứt đỏ "SL 1m ≈" tại giữa vùng ∓ `estStopDistance`; từ `asOf` tới `validUntil` hoặc 25 nến, tối thiểu 12 nến khung đang xem. Nhiều setup → các cột cạnh nhau (setup chính bên trái, cách 1 nến) để không chồng; nhãn overlay tự giãn dọc để không đè nhau. Setup `MARKET` của quyết định `ENTER` vẽ nét liền; setup đang chờ vẽ mờ, viền nét đứt, nhãn `Chờ hồi/Chờ phá vỡ <trigger>`. `STAND_ASIDE` không vẽ, trừ khi bật "Hiện setup tham khảo". Click thẻ setup ở panel → chỉ vẽ setup đó. Bản ghi cũ vẽ từ `action` |
 
+| Order flow | Price line nét chấm tím tại `price` đã quy đổi, nhãn `BM <loại> · <size> <đơn vị>` (vàng: lot, BTC: BTC); độ dày 1–3 theo `size` tương đối trong cùng ảnh + cùng `sizeSource`. Toggle "Order flow" chỉ hiện khi kết quả có `orderflow` |
+
+* Panel phân tích: với symbol trong `BOOKMAP_SYMBOLS` có checkbox **"Dùng ảnh Bookmap"** (mặc định tắt, nhớ trong localStorage). Bật → 2 ô ảnh (khung lớn / khung bé: chọn file, kéo thả, dán), ô offset (mặc định từ `/api/config.bookmap.offsets`, sửa được, nhớ theo symbol). Tắt → không gửi `bookmap`. Bật mà chưa có ảnh → chặn Analyze. Ảnh giữ trong phiên theo symbol. Runner không hỗ trợ → checkbox bị khoá.
+* Kết quả có mục "Order flow (Bookmap)" (summary, CVD, các mức, offset dùng / đo được); lịch sử hiện nhãn `BM`.
 * Mặc định ẩn mục của khung **nhỏ hơn** khung đang xem; mục của khung lớn hơn được snap về nến chứa nó.
 * `rightOffset` của time scale tự mở rộng để thấy hết phần tương lai.
