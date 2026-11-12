@@ -36,7 +36,7 @@ Với symbol trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT`), server
 - Mở chart BTC là thấy ngay tường (dày theo khối lượng) + POC, tự làm mới mỗi 15 giây, không cần chạy phân tích. Giống heatmap Bookmap: tường vẽ từ lúc xuất hiện; tường bị giá quét/hấp thụ dừng ở chỗ bị quét (dấu ×); tường bị rút trước khi giá chạm (lệnh ảo) vẽ nét chấm mờ. Ngưỡng tường `ORDERFLOW_WALL_MIN_BTCUSDT` (mặc định 8). Xem rõ nhất ở khung 1m–15m.
 - Giá order flow quy đổi từ Binance spot về giá chart (futures) bằng **basis = trung vị 60 phút** của chênh lệch giá đóng spot − futures cùng phút: vạch đứng yên giữa các phút, sai số vài $. Tường đã bị quét dùng basis lúc bị quét nên không dịch nữa. Thiếu dữ liệu → `ORDERFLOW_OFFSET_BTCUSDT` (mặc định 33).
 - Binance không có lịch sử sổ lệnh: lịch sử bắt đầu từ lúc server chạy (lưu SQLite 24 giờ, restart không mất). Cần ≥ 30 phút để thời gian đứng của tường đáng tin.
-- Vàng vẫn dùng ảnh Bookmap (Binance không có dữ liệu COMEX). Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để BTC quay lại dùng ảnh.
+- Vàng (`XAUUSD`): order flow lấy từ **Binance Futures XAUUSDT perp** (đơn vị oz), vẽ live trên chart giống BTC, basis = trung vị 60 phút XAUUSDT − giá chart. Lưu ý: đây là dòng lệnh crypto (~2% khối lượng COMEX), sổ lệnh chỉ phủ khoảng ±13$ quanh giá → chỉ để xác nhận phụ. Ảnh Bookmap vàng vẫn dùng được; mỗi phân tích chọn một nguồn. Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để tắt.
 
 ## Chạy
 

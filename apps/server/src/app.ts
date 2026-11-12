@@ -96,11 +96,13 @@ export async function buildApp(deps: AppDeps = {}) {
           symbol =>
             new BookCollector({
               symbol,
+              sourceSymbol: cfg.orderflowSources[symbol]?.symbol ?? symbol,
+              market: cfg.orderflowSources[symbol]?.market ?? 'spot',
               db,
               bucket: cfg.orderflowBuckets[symbol] ?? 10,
               sampleSec: cfg.orderflowSampleSec,
               retainH: cfg.orderflowRetainH,
-              resyncMin: cfg.orderflowResyncMin,
+              resyncMin: cfg.orderflowResyncMinBySymbol[symbol] ?? cfg.orderflowResyncMin,
               bigTradeQty: cfg.orderflowBigTrade[symbol] ?? Number.POSITIVE_INFINITY,
               log: msg => console.log(msg),
             }),
@@ -108,11 +110,12 @@ export async function buildApp(deps: AppDeps = {}) {
   const binanceOrderflow = collectors.length
     ? new BinanceOrderflow({
         collectors: Object.fromEntries(collectors.map(c => [c.symbol, c])),
+        sources: cfg.orderflowSources,
         buckets: cfg.orderflowBuckets,
         absorptionQty: cfg.orderflowAbsorb,
         wallMin: cfg.orderflowWallMin,
         offsets: cfg.orderflowOffsets,
-        futuresCandles: symbol => klines.getKlines({ symbol, tf: '1m', limit: 1440, closedOnly: true }).then(r => r.candles),
+        chartCandles: symbol => klines.getKlines({ symbol, tf: '1m', limit: 1440, closedOnly: true }).then(r => r.candles),
       })
     : undefined;
   for (const c of collectors) c.start();

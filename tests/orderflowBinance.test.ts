@@ -22,8 +22,8 @@ import {
   volumeProfile,
   type SpotCandle,
 } from '../apps/server/src/orderflow/calc.ts';
-import { BookCollector } from '../apps/server/src/orderflow/collector.ts';
-import { BinanceOrderflow, parseSpotKline } from '../apps/server/src/orderflow/binanceOrderflow.ts';
+import { BookCollector, depthSnapshotUrl, streamEndpoints } from '../apps/server/src/orderflow/collector.ts';
+import { BinanceOrderflow, parseSpotKline, sizeUnit, venueLabel } from '../apps/server/src/orderflow/binanceOrderflow.ts';
 import { formatOrderflowForAgent } from '../apps/server/src/orderflow/format.ts';
 import { validateBinanceOrderflow } from '../apps/server/src/validate/orderflow.ts';
 import { buildUserPrompt } from '../apps/server/src/runner/prompt.ts';
@@ -368,7 +368,7 @@ function setup(behavior: (req: AgentRunRequest, hooks: AgentRunHooks, svc: Analy
         samples: () => bookSamples,
         rawSamples: (from: number, to: number) => bookSamples.filter(x => x.t >= from && x.t <= to),
         trades: () => [],
-        status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: now - 3600, lastSampleAt: now, historyMin: 60, spotPrice: 103 }),
+        status: () => ({ symbol: 'BTCUSDT', sourceSymbol: 'BTCUSDT', market: 'spot' as const, coverLow: 0, coverHigh: 0, connected: true, synced: true, since: now - 3600, lastSampleAt: now, historyMin: 60, spotPrice: 103 }),
       },
     },
     buckets: { BTCUSDT: 10 },
@@ -396,6 +396,25 @@ describe('AnalysisService + order flow Binance', () => {
     expect(() => service.start({ symbol: 'ETHUSDT', primaryTf: '4h', contextTfs: [], orderflow: true })).toThrow(/Chưa bật order flow Binance/);
     expect(() => service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], orderflow: true, bookmap: {} })).toThrow(/Chọn một nguồn/);
     expect(service.orderflowStatus('btcusdt')).toMatchObject({ connected: true, historyMin: 60 });
+  });
+
+  it('symbol dùng Binance futures làm đại diện (vàng) vẫn giữ ảnh Bookmap', () => {
+    const stub = { samples: () => [], rawSamples: () => [], trades: () => [], status: () => ({}) as never };
+    const of = new BinanceOrderflow({
+      collectors: { BTCUSDT: stub, XAUUSD: stub },
+      sources: { XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } },
+      buckets: {},
+      absorptionQty: {},
+    });
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wca-of-'));
+    const db = openDb(':memory:');
+    const service = new AnalysisService(new AnalysisRepo(db), new KlineService(db, new FakeProvider(), 0), new FakeRunner(async () => ({ ok: true })), {
+      maxTfs: 4, barsPerTf: 300, screenshotDir: dir, validationBars: 300,
+      bookmap: { images: { BTCUSDT: { htf: '/x.png' }, XAUUSD: { htf: '/y.png' } }, offsets: {}, tolerances: {}, maxAgeMin: 30 },
+      binanceOrderflow: of,
+    });
+    expect(service.bookmapSymbols).toEqual(['XAUUSD']);
+    expect(service.orderflowSymbols).toEqual(['BTCUSDT', 'XAUUSD']);
   });
 
   it('chụp order flow lúc job chạy, request có orderflow, submit gắn levels server tính', async () => {
@@ -436,7 +455,7 @@ describe('order flow live cho chart', () => {
       return new Response(JSON.stringify(rows));
     }) as typeof fetch;
     const of = new BinanceOrderflow({
-      collectors: { BTCUSDT: { samples: () => [], rawSamples: () => [], trades: () => [], status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }) } },
+      collectors: { BTCUSDT: { samples: () => [], rawSamples: () => [], trades: () => [], status: () => ({ symbol: 'BTCUSDT', sourceSymbol: 'BTCUSDT', market: 'spot' as const, coverLow: 0, coverHigh: 0, connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }) } },
       buckets: { BTCUSDT: 10 },
       absorptionQty: {},
       fetchImpl,
@@ -463,7 +482,7 @@ describe('order flow live cho chart', () => {
           samples: () => [],
           rawSamples: (from: number, to: number) => (reads.push([from, to]), store.filter(x => x.t >= from && x.t <= to)),
           trades: () => [],
-          status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
+          status: () => ({ symbol: 'BTCUSDT', sourceSymbol: 'BTCUSDT', market: 'spot' as const, coverLow: 0, coverHigh: 0, connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
         },
       },
       buckets: {},
@@ -525,14 +544,14 @@ describe('basis spot − chart ổn định', () => {
           samples: (from, to) => samplesData.filter(x => x.t >= from && x.t <= to),
           rawSamples: (from, to) => samplesData.filter(x => x.t >= from && x.t <= to),
           trades: () => [],
-          status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
+          status: () => ({ symbol: 'BTCUSDT', sourceSymbol: 'BTCUSDT', market: 'spot' as const, coverLow: 0, coverHigh: 0, connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
         },
       },
       buckets: { BTCUSDT: 10 },
       absorptionQty: {},
       wallMin: { BTCUSDT: 8 },
       offsets: { BTCUSDT: 33 },
-      futuresCandles: async () => (futCalls++, fut),
+      chartCandles: async () => (futCalls++, fut),
       fetchImpl: (async () => new Response(JSON.stringify(spotRows))) as typeof fetch,
       now: () => now,
     });
@@ -564,5 +583,115 @@ describe('prompt', () => {
     const suffix = buildAgyPromptSuffix({ ...req, hasBinanceOrderflow: true });
     expect(suffix).toContain('"orderflow"');
     expect(suffix).not.toContain('lastPrices');
+  });
+});
+
+// ---------- Vàng: Binance Futures XAUUSDT perp ----------
+
+describe('LocalBook futures (đồng bộ theo pu)', () => {
+  it('event đầu phải phủ lastUpdateId; event sau phải có pu = u trước', () => {
+    const b = new LocalBook('futures');
+    b.applySnapshot({ lastUpdateId: 100, bids: [['3977', '30']], asks: [['3978', '20']] });
+    expect(b.applyDiff({ U: 80, u: 99, pu: 79, b: [], a: [] })).toBe('stale');
+    expect(b.applyDiff({ U: 101, u: 110, pu: 100, b: [], a: [] })).toBe('gap'); // U > lastUpdateId
+    expect(b.applyDiff({ U: 95, u: 105, pu: 94, b: [['3977', '0'], ['3976', '5']], a: [] })).toBe('applied');
+    expect(b.bestBid()).toBe(3976);
+    // futures: U không liền u+1 vẫn hợp lệ, miễn pu khớp
+    expect(b.applyDiff({ U: 120, u: 130, pu: 105, b: [], a: [] })).toBe('applied');
+    expect(b.applyDiff({ U: 140, u: 150, pu: 131, b: [], a: [] })).toBe('gap');
+  });
+});
+
+describe('nguồn futures', () => {
+  it('endpoint WS tách /public (sổ lệnh) và /market (lệnh khớp); snapshot fapi 1000 mức', () => {
+    expect(streamEndpoints('futures', 'XAUUSDT')).toEqual([
+      { url: 'wss://fstream.binance.com/public/stream?streams=xauusdt@depth@100ms', depth: true },
+      { url: 'wss://fstream.binance.com/market/stream?streams=xauusdt@aggTrade', depth: false },
+    ]);
+    expect(streamEndpoints('spot', 'BTCUSDT')).toHaveLength(1);
+    expect(depthSnapshotUrl('futures', 'XAUUSDT')).toBe('https://fapi.binance.com/fapi/v1/depth?symbol=XAUUSDT&limit=1000');
+    expect(sizeUnit('XAUUSDT')).toBe('oz');
+    expect(sizeUnit('BTCUSDT')).toBe('BTC');
+    expect(venueLabel({ market: 'futures', symbol: 'XAUUSDT' })).toBe('Binance Futures XAUUSDT perp');
+  });
+
+  it('collector futures: lưu theo symbol chart, đồng bộ bằng pu, lệnh khớp từ socket riêng', async () => {
+    const db = openDb(':memory:');
+    const sockets: Record<string, FakeWs> = {};
+    const urls: string[] = [];
+    const fetchImpl = (async (u: string) => {
+      urls.push(String(u));
+      return new Response(JSON.stringify({ lastUpdateId: 100, bids: [['3977.2', '30'], ['3970', '400']], asks: [['3977.3', '25'], ['3985', '300']] }));
+    }) as typeof fetch;
+    const col = new BookCollector({
+      symbol: 'XAUUSD', sourceSymbol: 'XAUUSDT', market: 'futures', bucket: 1, sampleSec: 3600, retainH: 24, resyncMin: 600, bigTradeQty: 50, db, fetchImpl,
+      wsFactory: url => (sockets[url] = new FakeWs()) as unknown as WebSocket, now: () => 5000,
+    });
+    col.start();
+    expect(Object.keys(sockets)).toHaveLength(2);
+    const depth = sockets['wss://fstream.binance.com/public/stream?streams=xauusdt@depth@100ms']!;
+    const trades = sockets['wss://fstream.binance.com/market/stream?streams=xauusdt@aggTrade']!;
+    depth.emit({ e: 'depthUpdate', U: 98, u: 102, pu: 97, b: [['3970', '450']], a: [] });
+    await col.resync('test');
+    expect(urls[0]).toContain('fapi.binance.com/fapi/v1/depth?symbol=XAUUSDT');
+    depth.emit({ e: 'depthUpdate', U: 110, u: 111, pu: 102, b: [], a: [['3985', '0']] });
+    const s = col.takeSample()!;
+    expect(s.bids).toEqual([[3970, 450], [3977, 30]]);
+    expect(s.asks).toEqual([[3977, 25]]);
+    trades.emit({ e: 'aggTrade', p: '3977', q: '60', T: 5_001_000, m: false });
+    trades.emit({ e: 'aggTrade', p: '3977', q: '1', T: 5_002_000, m: false });
+    expect(col.trades(0, 9999)).toEqual([{ t: 5001, price: 3977, qty: 60, side: 'BUY' }]);
+    expect(col.status()).toMatchObject({ symbol: 'XAUUSD', sourceSymbol: 'XAUUSDT', market: 'futures', coverLow: 3970, coverHigh: 3985 });
+    expect(db.prepare('SELECT COUNT(*) AS n FROM book_samples WHERE symbol = ?').get('XAUUSD')).toEqual({ n: 1 });
+    col.stop();
+  });
+
+  it('BinanceOrderflow futures: nến fapi, đơn vị oz, basis theo nến chart, ghi chú vùng phủ', async () => {
+    const T = 1_794_400_020 - (1_794_400_020 % 60);
+    const now = T + 90 * 60 + 5;
+    const rows = Array.from({ length: 90 }, (_, i) => [(T + i * 60) * 1000, '1', '1', '1', '3980', '10', 0, '0', 1, '6', '0', '0']);
+    const chart = rows.map(r => ({ time: (r[0] as number) / 1000, close: 3978.5 }));
+    const klineUrls: string[] = [];
+    const sample: BookSample = { t: now - 10, mid: 3980, bids: [[3975, 600]], asks: [[3985, 100]] };
+    const of = new BinanceOrderflow({
+      collectors: {
+        XAUUSD: {
+          samples: () => [sample],
+          rawSamples: () => [sample],
+          trades: () => [],
+          status: () => ({ symbol: 'XAUUSD', sourceSymbol: 'XAUUSDT', market: 'futures', coverLow: 3967, coverHigh: 3993, connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: 3980 }),
+        },
+      },
+      sources: { XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } },
+      buckets: { XAUUSD: 1 },
+      absorptionQty: {},
+      chartCandles: async () => chart,
+      fetchImpl: (async (u: string) => (klineUrls.push(String(u)), new Response(JSON.stringify(rows)))) as typeof fetch,
+      now: () => now,
+    });
+    const snap = await of.snapshot('XAUUSD', 3978.5);
+    expect(klineUrls[0]).toMatch(/^https:\/\/fapi\.binance\.com\/fapi\/v1\/klines\?symbol=XAUUSDT&/);
+    expect(snap).toMatchObject({ venue: 'Binance Futures XAUUSDT perp', unit: 'oz', offset: 1.5 });
+    expect(snap.notes.join(' ')).toMatch(/±13/);
+    expect(formatOrderflowForAgent(snap)).toContain('giá Binance Futures XAUUSDT perp − basis 1.5');
+  });
+
+  it('thị trường nghỉ (không có nến chart mới): giữ basis của phút cuối còn dữ liệu', async () => {
+    const T = 1_794_400_020 - (1_794_400_020 % 60);
+    const now = T + 200 * 60 + 5; // nến chart dừng ở phút 89
+    const rows = Array.from({ length: 200 }, (_, i) => [(T + i * 60) * 1000, '1', '1', '1', '3980', '10', 0, '0', 1, '6', '0', '0']);
+    const chart = rows.slice(0, 90).map(r => ({ time: (r[0] as number) / 1000, close: 3977 }));
+    const of = new BinanceOrderflow({
+      collectors: {},
+      sources: { XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } },
+      buckets: {},
+      absorptionQty: {},
+      offsets: { XAUUSD: 0 },
+      chartCandles: async () => chart,
+      fetchImpl: (async () => new Response(JSON.stringify(rows))) as typeof fetch,
+      now: () => now,
+    });
+    const b = await of.basisFn('XAUUSD', now);
+    expect(b).toMatchObject({ current: 3, fallback: false });
   });
 });

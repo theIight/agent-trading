@@ -64,6 +64,10 @@ export function fetchBookmapStatus(symbol: string): Promise<{ now: number; image
 export interface OrderflowStatus {
   now: number;
   symbol: string;
+  sourceSymbol?: string;
+  market?: 'spot' | 'futures';
+  coverLow?: number;
+  coverHigh?: number;
   connected: boolean;
   synced: boolean;
   since: number | null;

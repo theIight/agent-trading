@@ -351,7 +351,7 @@ export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
       sizeSource: 'BOOK',
       persistMin: w.persistMin,
       strength: r2(0.3 + 0.7 * (maxWall ? w.size / maxWall : 0)),
-      note: `${w.side === 'BID' ? 'Lệnh chờ mua' : 'Lệnh chờ bán'} ${fmt(w.size)} (spot ${w.price}–${w.price + inp.bucket}), đứng ${Math.round(w.persistMin)} phút` +
+      note: `${w.side === 'BID' ? 'Lệnh chờ mua' : 'Lệnh chờ bán'} ${fmt(w.size)} (giá nguồn ${w.price}–${w.price + inp.bucket}), đứng ${Math.round(w.persistMin)} phút` +
         (w.maxSize > w.size * 1.3 ? `, đã giảm từ ${fmt(w.maxSize)}` : ''),
     });
   }

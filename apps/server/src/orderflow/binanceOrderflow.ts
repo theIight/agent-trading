@@ -1,9 +1,27 @@
 import type { WallSegment } from '@wca/shared';
 import { basisByMinute, buildSnapshot, findWallSegments, medianBasis, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
 import type { BookSample } from './localBook.ts';
-import { BINANCE_SPOT_REST, BookCollector, type CollectorStatus } from './collector.ts';
+import type { BookMarket } from './localBook.ts';
+import { BINANCE_FUTURES_REST, BINANCE_SPOT_REST, BookCollector, type CollectorStatus } from './collector.ts';
 
-// Order flow Binance spot: quản lý collector theo symbol, lấy nến 1m spot (taker buy) và dựng bản tóm tắt cho agent.
+// Order flow Binance (spot hoặc USDⓈ-M futures): quản lý collector theo symbol chart, lấy nến 1m nguồn (taker buy)
+// và dựng bản tóm tắt cho agent. Giá nguồn được quy đổi về giá chart bằng basis ổn định.
+
+/** Nguồn Binance của một symbol chart. */
+export interface OrderflowSourceRef {
+  market: BookMarket;
+  symbol: string;
+}
+
+/** Nguồn của symbol chart (mặc định: spot cùng tên). */
+export function sourceOf(sources: Record<string, OrderflowSourceRef> | undefined, symbol: string): OrderflowSourceRef {
+  return sources?.[symbol] ?? { market: 'spot', symbol };
+}
+
+/** Tên nguồn hiển thị cho agent/panel. */
+export function venueLabel(src: OrderflowSourceRef): string {
+  return src.market === 'futures' ? `Binance Futures ${src.symbol} perp` : 'Binance spot';
+}
 
 export interface OrderflowSource {
   samples(from: number, to: number): ReturnType<BookCollector['samples']>;
@@ -14,14 +32,16 @@ export interface OrderflowSource {
 
 export interface BinanceOrderflowOptions {
   collectors: Record<string, OrderflowSource>;
+  /** Symbol chart → nguồn Binance; thiếu = spot cùng tên. */
+  sources?: Record<string, OrderflowSourceRef>;
   buckets: Record<string, number>;
   absorptionQty: Record<string, number>;
   /** Ngưỡng khối lượng tối thiểu của tường (lịch sử tường), theo symbol. */
   wallMin?: Record<string, number>;
-  /** Offset dự phòng giá spot − giá chart theo symbol (khi không tính được basis). */
+  /** Offset dự phòng giá nguồn − giá chart theo symbol (khi không tính được basis). */
   offsets?: Record<string, number>;
-  /** Nến 1m futures (giá chart) ĐÃ ĐÓNG ~24h, để tính basis; không có → dùng offset dự phòng. */
-  futuresCandles?: (symbol: string) => Promise<readonly { time: number; close: number }[]>;
+  /** Nến 1m của chart ĐÃ ĐÓNG ~24h, để tính basis; không có → dùng offset dự phòng. */
+  chartCandles?: (symbol: string) => Promise<readonly { time: number; close: number }[]>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -44,8 +64,10 @@ export function parseSpotKline(k: RawSpotKline): SpotCandle {
   };
 }
 
-export function sizeUnit(symbol: string): string {
-  return symbol.endsWith('USDT') ? symbol.slice(0, -4) : '';
+/** Đơn vị khối lượng theo symbol Binance (XAUUSDT: 1 hợp đồng = 1 oz). */
+export function sizeUnit(sourceSymbol: string): string {
+  const base = sourceSymbol.endsWith('USDT') ? sourceSymbol.slice(0, -4) : '';
+  return base === 'XAU' || base === 'PAXG' ? 'oz' : base;
 }
 
 /** Bản live dùng lại trong khoảng này (nhiều tab / poll dồn). */
@@ -61,13 +83,13 @@ export interface LiveOrderflowSnapshot extends BinanceOrderflowSnapshot {
 export class BinanceOrderflow {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
-  /** Nến 1m spot đã đóng theo symbol: chỉ tải thêm phần mới. */
+  /** Nến 1m nguồn đã đóng theo symbol: chỉ tải thêm phần mới. */
   private readonly candleCache = new Map<string, SpotCandle[]>();
   private readonly liveCache = new Map<string, { at: number; snap: Promise<LiveOrderflowSnapshot> }>();
   /** Mẫu sổ lệnh đã parse theo symbol: chỉ đọc thêm mẫu mới từ SQLite. */
   private readonly sampleCache = new Map<string, BookSample[]>();
-  /** Nến futures đã đóng theo symbol, cache theo phút đóng gần nhất. */
-  private readonly futCache = new Map<string, { minute: number; candles: readonly { time: number; close: number }[] }>();
+  /** Nến chart đã đóng theo symbol, cache theo phút đóng gần nhất. */
+  private readonly chartCache = new Map<string, { minute: number; candles: readonly { time: number; close: number }[] }>();
   /** Số request klines đã gọi (để test cache). */
   klineRequests = 0;
 
@@ -88,7 +110,11 @@ export class BinanceOrderflow {
     return this.opts.collectors[symbol]?.status() ?? null;
   }
 
-  /** Nến 1m spot ĐÃ ĐÓNG trong `hours` giờ tới `now` (cache, chỉ tải phần mới). */
+  source(symbol: string): OrderflowSourceRef {
+    return sourceOf(this.opts.sources, symbol);
+  }
+
+  /** Nến 1m nguồn (spot / futures Binance) ĐÃ ĐÓNG trong `hours` giờ tới `now` (cache, chỉ tải phần mới). */
   async spotCandles(symbol: string, now: number, hours = TRADE_WINDOW_H): Promise<SpotCandle[]> {
     const from = now - hours * 3600;
     const cached = (this.candleCache.get(symbol) ?? []).filter(c => c.time >= from && c.time + 60 <= now);
@@ -104,13 +130,15 @@ export class BinanceOrderflow {
 
   private async fetchSpotCandles(symbol: string, fromSec: number, now: number): Promise<SpotCandle[]> {
     const out: SpotCandle[] = [];
+    const src = this.source(symbol);
+    const base = src.market === 'futures' ? `${BINANCE_FUTURES_REST}/fapi/v1/klines` : `${BINANCE_SPOT_REST}/api/v3/klines`;
     let start = fromSec * 1000;
     const end = now * 1000;
     while (start < end) {
-      const params = new URLSearchParams({ symbol, interval: '1m', startTime: String(start), endTime: String(end), limit: '1000' });
+      const params = new URLSearchParams({ symbol: src.symbol, interval: '1m', startTime: String(start), endTime: String(end), limit: '1000' });
       this.klineRequests++;
-      const res = await this.fetchImpl(`${BINANCE_SPOT_REST}/api/v3/klines?${params}`, { signal: AbortSignal.timeout(15_000) });
-      if (!res.ok) throw new Error(`Binance spot klines ${res.status}`);
+      const res = await this.fetchImpl(`${base}?${params}`, { signal: AbortSignal.timeout(15_000) });
+      if (!res.ok) throw new Error(`Binance ${src.market} klines ${res.status}`);
       const rows = (await res.json()) as RawSpotKline[];
       if (!rows.length) break;
       out.push(...rows.map(parseSpotKline));
@@ -134,28 +162,30 @@ export class BinanceOrderflow {
   }
 
   /**
-   * Basis spot − chart tại thời điểm bất kỳ: trung vị 60 phút `close spot − close futures` (chỉ đổi khi có nến đóng mới).
+   * Basis nguồn − chart tại thời điểm bất kỳ: trung vị 60 phút `close nguồn − close chart` (chỉ đổi khi có nến đóng mới).
    * Thiếu dữ liệu → offset dự phòng (`fallback = true`).
    */
   async basisFn(symbol: string, now: number): Promise<{ at: (t: number) => number; current: number; fallback: boolean }> {
     const fallbackValue = this.opts.offsets?.[symbol] ?? 0;
-    let fut: readonly { time: number; close: number }[] = [];
-    if (this.opts.futuresCandles) {
+    let chart: readonly { time: number; close: number }[] = [];
+    if (this.opts.chartCandles) {
       const minute = Math.floor(now / 60) * 60;
-      const hit = this.futCache.get(symbol);
-      if (hit && hit.minute === minute) fut = hit.candles;
+      const hit = this.chartCache.get(symbol);
+      if (hit && hit.minute === minute) chart = hit.candles;
       else {
         try {
-          fut = await this.opts.futuresCandles(symbol);
-          this.futCache.set(symbol, { minute, candles: fut });
+          chart = await this.opts.chartCandles(symbol);
+          this.chartCache.set(symbol, { minute, candles: chart });
         } catch {
-          fut = hit?.candles ?? [];
+          chart = hit?.candles ?? [];
         }
       }
     }
-    const byMin = basisByMinute(await this.spotCandles(symbol, now), fut);
+    const byMin = basisByMinute(await this.spotCandles(symbol, now), chart);
     const lastClosed = Math.floor(now / 60) * 60 - 60;
-    const cur = medianBasis(byMin, lastClosed);
+    // Thị trường nghỉ (vàng cuối tuần): không có cặp nến mới → dùng basis của phút gần nhất còn dữ liệu.
+    const lastPair = [...byMin.keys()].reduce((m, t) => (t <= lastClosed && t > m ? t : m), -Infinity);
+    const cur = medianBasis(byMin, lastClosed) ?? (Number.isFinite(lastPair) ? medianBasis(byMin, lastPair) : null);
     const current = cur ?? fallbackValue;
     return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed)) ?? current, current, fallback: cur === null };
   }
@@ -194,14 +224,15 @@ export class BinanceOrderflow {
   async snapshot(symbol: string, appPrice: number | null): Promise<BinanceOrderflowSnapshot> {
     const src = this.opts.collectors[symbol];
     if (!src) throw new Error(`Chưa bật order flow Binance cho ${symbol}`);
+    const ref = this.source(symbol);
     const now = this.now();
     const candles = await this.spotCandles(symbol, now);
     const bucket = this.opts.buckets[symbol] ?? 10;
     const basis = await this.basisFn(symbol, now);
     const snap = buildSnapshot({
       symbol,
-      venue: 'Binance spot',
-      unit: sizeUnit(symbol),
+      venue: venueLabel(ref),
+      unit: sizeUnit(ref.symbol),
       now,
       bucket,
       samples: src.samples(now - BOOK_WINDOW_MIN * 60, now),
@@ -211,7 +242,12 @@ export class BinanceOrderflow {
       absorptionMinQty: this.opts.absorptionQty[symbol] ?? Number.POSITIVE_INFINITY,
       offset: basis.current,
     });
-    if (basis.fallback) snap.notes.push(`Chưa đủ dữ liệu nến futures để tính basis — dùng offset dự phòng ${basis.current}`);
+    if (basis.fallback) snap.notes.push(`Chưa đủ dữ liệu nến chart để tính basis — dùng offset dự phòng ${basis.current}`);
+    const st = src.status();
+    if (ref.market === 'futures' && st.coverHigh > st.coverLow) {
+      const half = Math.round(((st.coverHigh - st.coverLow) / 2) * 10) / 10;
+      snap.notes.push(`Sổ lệnh futures chỉ phủ khoảng ±${half} quanh giá (snapshot 1000 mức); tường xa hơn không thấy được`);
+    }
     return snap;
   }
 }

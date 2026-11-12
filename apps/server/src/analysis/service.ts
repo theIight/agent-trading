@@ -235,10 +235,14 @@ export class AnalysisService {
     return rec;
   }
 
-  /** Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap (trừ symbol đã dùng order flow Binance). */
+  /**
+   * Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap. Symbol dùng order flow Binance spot (cùng thị trường, thay hẳn Bookmap)
+   * bị loại; symbol dùng Binance futures làm đại diện (vàng: XAUUSDT perp) vẫn giữ ảnh Bookmap để chọn.
+   */
   get bookmapSymbols(): string[] {
+    const of = this.opts.binanceOrderflow;
     return Object.entries(this.opts.bookmap?.images ?? {})
-      .filter(([sym, roles]) => Object.values(roles).some(Boolean) && !this.opts.binanceOrderflow?.has(sym))
+      .filter(([sym, roles]) => Object.values(roles).some(Boolean) && !(of?.has(sym) && of.source(sym).market === 'spot'))
       .map(([sym]) => sym);
   }
 
@@ -526,7 +530,7 @@ export class AnalysisService {
       source: 'binance',
       venue: snap.venue,
       asOf: new Date(snap.asOf * 1000).toISOString(),
-      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart (spot − basis trung vị 60 phút); chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
+      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart (giá Binance − basis trung vị 60 phút); chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
     };
   }
 

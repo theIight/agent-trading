@@ -9,7 +9,7 @@ export function formatOrderflowForAgent(s: BinanceOrderflowSnapshot): string {
   const toApp = (p: number) => Math.round((p - s.offset) * 100) / 100;
   const lines: string[] = [
     `Order flow ${s.symbol} — ${s.venue}, lấy lúc ${iso(s.asOf)}. Lịch sử sổ lệnh dùng để tính: ${Math.round(s.historyMin)} phút.`,
-    `MỌI giá dưới đây ĐÃ quy đổi về giá chart (futures) = giá Binance spot − basis ${s.offset} (trung vị 60 phút spot − futures). Lúc lấy: spot ${s.spotPrice}, giá chart ${s.appPrice ?? 'không rõ'}` +
+    `MỌI giá dưới đây ĐÃ quy đổi về giá chart = giá ${s.venue} − basis ${s.offset} (trung vị 60 phút giá nguồn − giá chart). Lúc lấy: giá nguồn ${s.spotPrice}, giá chart ${s.appPrice ?? 'không rõ'}` +
       (s.appPrice != null ? ` (chênh lệch thực tế ${Math.round((s.spotPrice - s.appPrice) * 100) / 100})` : '') +
       '. Sai số quy đổi vài $; entry/SL/TP vẫn lấy từ get_klines.',
     ...s.notes.map(n => `Lưu ý: ${n}`),
