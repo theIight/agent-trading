@@ -33,7 +33,8 @@ Khai báo đường dẫn ảnh mà Bookmap ghi ra (ghi đè liên tục) trong 
 
 Với symbol trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT`), server **tự ghi sổ lệnh và lệnh khớp của Binance spot** qua WebSocket công khai (không cần key) thay vì đọc ảnh Bookmap. Panel có tick **"Dùng order flow Binance"** kèm trạng thái ghi. Khi phân tích, server tính tường thanh khoản kèm thời gian đứng (lọc tường ảo), POC/HVN/LVN 24h, CVD + phân kỳ, hấp thụ; agent đọc qua tool `get_orderflow` và chỉ nhận xét, các mức do server gắn và vẽ.
 
-- Giá đã quy đổi tự động từ spot về giá chart (futures) bằng basis đo lúc phân tích.
+- Mở chart BTC là thấy ngay tường (dày theo khối lượng) + POC, tự làm mới mỗi 15 giây, không cần chạy phân tích.
+- Giá đã quy đổi tự động từ spot về giá chart (futures) bằng basis đo lúc lấy.
 - Binance không có lịch sử sổ lệnh: lịch sử bắt đầu từ lúc server chạy (lưu SQLite 24 giờ, restart không mất). Cần ≥ 30 phút để thời gian đứng của tường đáng tin.
 - Vàng vẫn dùng ảnh Bookmap (Binance không có dữ liệu COMEX). Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để BTC quay lại dùng ảnh.
 

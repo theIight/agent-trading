@@ -80,6 +80,16 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     }
   });
 
+  /** Order flow hiện tại (vẽ sẵn trên chart, không cần phân tích). */
+  app.get('/api/orderflow/:symbol/levels', async (req, reply) => {
+    try {
+      return await service.orderflowLive((req.params as { symbol: string }).symbol);
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
   app.get('/api/analyses', async req => {
     const { symbol, limit } = req.query as { symbol?: string; limit?: string };
     return repo.list(symbol ? normalizeSymbol(symbol) : undefined, Math.min(Number(limit) || 50, 200));

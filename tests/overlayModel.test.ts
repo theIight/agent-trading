@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisResult, Candle, TradePlan, TradeSetup } from '@wca/shared';
-import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
+import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, EMPTY_MODEL, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
 
 const H4 = 14400;
 const T0 = 1_790_000_000 - (1_790_000_000 % H4);
@@ -280,6 +280,33 @@ describe('layer Order flow (Bookmap)', () => {
     const many = [80, 70, 60, 50].map((size, i) => lv('ASK_WALL', 'htf', 4060 + i, size, 'COB'));
     const m = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow: { ...orderflow, levels: many } }), candles, '4h');
     expect(m.orderflowLines.map(l => l.label)).toEqual(['80', '70', '60']);
+  });
+
+  it('độ dày theo khối lượng: tường lớn nhất 6px, 50% → 3.5px; POC nét chấm 1px', () => {
+    const levels = [lv('ASK_WALL', 'htf', 4068, 80, 'COB'), lv('BID_WALL', 'htf', 4030, 40, 'COB'), lv('POC', 'htf', 4044.5, 8136, 'SVP')];
+    const m = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow: { ...orderflow, levels } }), candles, '4h');
+    expect(m.orderflowLines.map(l => [l.label, l.width, l.dashed])).toEqual([
+      ['80', 6, false],
+      ['40', 3.5, false],
+      ['POC', 1, true],
+    ]);
+  });
+
+  it('order flow live: vẽ cả khi chưa có phân tích, và thay cho order flow của phân tích', () => {
+    const live = [
+      { kind: 'BID_WALL', sourcePrice: 73000, price: 72973, size: 58, sizeSource: 'BOOK', strength: 1, note: '' },
+      { kind: 'BID_WALL', sourcePrice: 72880, price: 72853, size: 29, sizeSource: 'BOOK', strength: 0.6, note: '' },
+    ] as NonNullable<AnalysisResult['orderflow']>['levels'];
+    const alone = buildOverlayModel(null, candles, '4h', { liveOrderflow: live });
+    expect(alone.orderflowLines.map(l => [l.label, l.price, l.width])).toEqual([
+      ['58', 72973, 6],
+      ['29', 72853, 3.5],
+    ]);
+    expect(alone.markers).toEqual([]);
+    const withAnalysis = buildOverlayModel(analysis({ orderflow }), candles, '4h', { liveOrderflow: live });
+    expect(withAnalysis.orderflowLines.map(l => l.price)).toEqual([72973, 72853]);
+    expect(buildOverlayModel(null, candles, '4h', { liveOrderflow: live, layers: { ...ALL_LAYERS_ON, orderflow: false } }).orderflowLines).toEqual([]);
+    expect(buildOverlayModel(null, candles, '4h')).toEqual(EMPTY_MODEL);
   });
 
   it('tắt layer hoặc không có orderflow → không vẽ', () => {

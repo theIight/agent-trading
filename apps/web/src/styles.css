@@ -141,6 +141,16 @@ button, input { font: inherit; color: inherit; }
 
 .layer-toggles label { display: flex; align-items: center; gap: 4px; cursor: pointer; }
 
+.of-chart-status {
+  position: absolute;
+  top: 58px;
+  left: 12px;
+  z-index: 3;
+  font-size: 11px;
+  pointer-events: none;
+}
+.of-chart-status.down { color: var(--down); }
+
 /* ---------- Panel phân tích ---------- */
 .panel {
   width: 360px;

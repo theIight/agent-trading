@@ -25,6 +25,7 @@ const MODELS_KEY = 'wca:runnerModels';
 const USE_BOOKMAP_KEY = 'wca:useBookmap';
 const BOOKMAP_OFFSETS_KEY = 'wca:bookmapOffsets';
 const USE_ORDERFLOW_KEY = 'wca:useBinanceOrderflow';
+const LAYER_ORDERFLOW_KEY = 'wca:layerOrderflow';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -113,7 +114,7 @@ interface AnalysisState {
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   current: null,
   currentRecord: null,
-  layers: { ...ALL_LAYERS_ON },
+  layers: { ...ALL_LAYERS_ON, orderflow: load<boolean>(LAYER_ORDERFLOW_KEY, true) },
   selectedSetup: null,
   showReferenceSetups: false,
   contextTfs: load<Timeframe[]>(CONTEXT_KEY, ['1d', '5m']),
@@ -134,7 +135,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setCurrent: current => set({ current, selectedSetup: null }),
   selectSetup: i => set(s => ({ selectedSetup: s.selectedSetup === i ? null : i })),
   setShowReferenceSetups: showReferenceSetups => set({ showReferenceSetups }),
-  toggleLayer: key => set(s => ({ layers: { ...s.layers, [key]: !s.layers[key] } })),
+  toggleLayer: key => {
+    const layers = { ...get().layers, [key]: !get().layers[key] };
+    set({ layers });
+    if (key === 'orderflow') save(LAYER_ORDERFLOW_KEY, layers.orderflow);
+  },
 
   toggleContextTf: (tf, maxTotal) => {
     const { contextTfs } = get();

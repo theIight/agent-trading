@@ -107,13 +107,21 @@ export interface PriceLineItem {
   style: 'solid' | 'dashed' | 'dotted';
 }
 
-/** Vạch order flow (Bookmap): ngang toàn chart, nhãn nhỏ ở mép phải, không gắn nhãn trên trục giá. */
+/** Vạch order flow: ngang toàn chart, nhãn nhỏ ở mép phải, không gắn nhãn trên trục giá. */
 export interface OrderflowLineItem {
   price: number;
   color: string;
   textColor: string;
   label: string;
+  /** Độ dày (px): tường dày theo khối lượng, POC mảnh. */
+  width: number;
+  /** POC: nét chấm; tường: dải liền. */
+  dashed: boolean;
 }
+
+/** Độ dày vạch tường: OF_MIN_WIDTH (rất nhỏ) → OF_MAX_WIDTH (tường lớn nhất cùng nhóm). */
+export const OF_MIN_WIDTH = 1;
+export const OF_MAX_WIDTH = 6;
 
 /** Chỉ vẽ tường có size ≥ tỉ lệ này × tường lớn nhất cùng ảnh. */
 export const OF_MIN_WALL_RATIO = 0.4;
@@ -194,7 +202,11 @@ export interface BuildOptions {
   selectedSetup?: number | null;
   /** Khi đứng ngoài: vẫn vẽ setup tham khảo. */
   showReferenceSetups?: boolean;
+  /** Order flow hiện tại (live) của symbol đang xem: có thì vẽ thay cho order flow của phân tích, kể cả khi chưa có phân tích. */
+  liveOrderflow?: OrderflowLevels | null;
 }
+
+type OrderflowLevels = NonNullable<AnalysisResult['orderflow']>['levels'];
 
 interface PositionTool {
   direction: 'LONG' | 'SHORT';
@@ -308,8 +320,12 @@ export function buildOverlayModel(
   currentTf: Timeframe,
   opts: BuildOptions = {},
 ): OverlayModel {
-  if (!analysis || !candles.length) return EMPTY_MODEL;
   const layers = opts.layers ?? ALL_LAYERS_ON;
+  if (!candles.length) return EMPTY_MODEL;
+  if (!analysis) {
+    if (!opts.liveOrderflow || !layers.orderflow) return EMPTY_MODEL;
+    return { ...EMPTY_MODEL, orderflowLines: buildOrderflowLines(opts.liveOrderflow) };
+  }
   const curSec = tfSeconds(currentTf);
   const visibleTf = (tf: Timeframe) => opts.showLowerTfItems || tfSeconds(tf) >= curSec;
   const tfTag = (tf: Timeframe) => (tf === currentTf ? '' : `·${tfLabel(tf)}`);
@@ -387,7 +403,8 @@ export function buildOverlayModel(
     }
   }
 
-  if (layers.orderflow && analysis.orderflow) model.orderflowLines = buildOrderflowLines(analysis.orderflow.levels);
+  const ofLevels = opts.liveOrderflow ?? analysis.orderflow?.levels;
+  if (layers.orderflow && ofLevels) model.orderflowLines = buildOrderflowLines(ofLevels);
 
   if (layers.forecast) {
     const ranked = [...analysis.scenarios].sort((a, b) => b.probability - a.probability);
@@ -455,10 +472,10 @@ export function buildOverlayModel(
 const fmtSize = (n: number) => String(Number(n.toFixed(2)));
 
 /**
- * Vạch order flow trên chart: chỉ tường lớn (≥ OF_MIN_WALL_RATIO × tường lớn nhất cùng ảnh, tối đa
- * OF_MAX_WALLS_PER_SIDE mỗi phía, phải có size) và POC. HVN/LVN/hấp thụ/lệnh lớn chỉ hiện ở panel.
+ * Vạch order flow trên chart: chỉ tường lớn (≥ OF_MIN_WALL_RATIO × tường lớn nhất cùng ảnh / sổ lệnh, tối đa
+ * OF_MAX_WALLS_PER_SIDE mỗi phía, phải có size), dày theo khối lượng; POC nét chấm mảnh. HVN/LVN/hấp thụ/lệnh lớn chỉ hiện ở panel.
  */
-export function buildOrderflowLines(levels: NonNullable<AnalysisResult['orderflow']>['levels']): OrderflowLineItem[] {
+export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[] {
   const placed = levels.filter(lv => lv.price !== undefined);
   const walls = placed.filter(lv => (lv.kind === 'ASK_WALL' || lv.kind === 'BID_WALL') && lv.size !== undefined);
   const maxByImage = new Map<string, number>();
@@ -471,15 +488,23 @@ export function buildOrderflowLines(levels: NonNullable<AnalysisResult['orderflo
       .filter(w => w.kind === kind)
       .sort((a, b) => b.size! - a.size!)
       .slice(0, OF_MAX_WALLS_PER_SIDE)
-      .forEach(w =>
-        out.push({ price: w.price!, color: ask ? COLORS.ofAsk : COLORS.ofBid, textColor: ask ? COLORS.ofAskText : COLORS.ofBidText, label: fmtSize(w.size!) }),
-      );
+      .forEach(w => {
+        const ratio = w.size! / maxByImage.get(w.image ?? 'book')!;
+        out.push({
+          price: w.price!,
+          color: ask ? COLORS.ofAsk : COLORS.ofBid,
+          textColor: ask ? COLORS.ofAskText : COLORS.ofBidText,
+          label: fmtSize(w.size!),
+          width: Math.round((OF_MIN_WIDTH + (OF_MAX_WIDTH - OF_MIN_WIDTH) * ratio) * 10) / 10,
+          dashed: false,
+        });
+      });
   }
   const pocs = new Set<number>();
   for (const lv of placed) {
     if (lv.kind !== 'POC' || pocs.has(lv.price!)) continue;
     pocs.add(lv.price!);
-    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC' });
+    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC', width: 1, dashed: true });
   }
   return out;
 }

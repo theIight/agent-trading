@@ -373,6 +373,58 @@ describe('AnalysisService + order flow Binance', () => {
   });
 });
 
+describe('order flow live cho chart', () => {
+  it('cache nến spot: lần sau chỉ tải phần mới; bản live dùng lại trong 10 giây', async () => {
+    let now = 1_000_000 * 60; // phút chẵn
+    const urls: string[] = [];
+    const fetchImpl = (async (url: string) => {
+      urls.push(String(url));
+      const p = new URL(String(url)).searchParams;
+      const start = Number(p.get('startTime'));
+      const end = Number(p.get('endTime'));
+      const rows = [];
+      for (let t = Math.ceil(start / 60_000) * 60_000; t <= end && rows.length < 1000; t += 60_000) rows.push([t, '1', '2', '0.5', '1.5', '3', 0, '0', 1, '2', '0', '0']);
+      return new Response(JSON.stringify(rows));
+    }) as typeof fetch;
+    const of = new BinanceOrderflow({
+      collectors: { BTCUSDT: { samples: () => [], trades: () => [], status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }) } },
+      buckets: { BTCUSDT: 10 },
+      absorptionQty: {},
+      fetchImpl,
+      now: () => now,
+    });
+    const first = await of.spotCandles('BTCUSDT', now);
+    expect(first).toHaveLength(1440);
+    expect(of.klineRequests).toBe(2);
+    expect(await of.spotCandles('BTCUSDT', now + 30)).toHaveLength(1439); // cửa sổ trượt bỏ nến đầu; chưa có nến đóng mới → không gọi
+    expect(of.klineRequests).toBe(2);
+    now += 120;
+    const next = await of.spotCandles('BTCUSDT', now);
+    expect(of.klineRequests).toBe(3);
+    expect(next.at(-1)!.time).toBe(now - 60);
+    expect(next[0]!.time).toBeGreaterThanOrEqual(now - 86400);
+    expect(new Set(next.map(c => c.time)).size).toBe(next.length);
+
+    let priceCalls = 0;
+    const price = async () => (priceCalls++, 1.4);
+    const a = await of.live('BTCUSDT', price);
+    now += 5;
+    expect(await of.live('BTCUSDT', price)).toBe(a);
+    expect(priceCalls).toBe(1);
+    now += 10;
+    await of.live('BTCUSDT', price);
+    expect(priceCalls).toBe(2);
+  });
+
+  it('service.orderflowLive trả levels đã quy đổi; symbol không bật → 404', async () => {
+    const { service } = setup(async () => ({ ok: true }));
+    const live = await service.orderflowLive('btcusdt');
+    expect(live).toMatchObject({ source: 'binance', symbol: 'BTCUSDT', basis: 3, connected: true });
+    expect(live.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 77 });
+    await expect(service.orderflowLive('ETHUSDT')).rejects.toThrow(/Chưa bật/);
+  });
+});
+
 describe('prompt', () => {
   const req = { analysisId: 'abc', symbol: 'BTCUSDT', primaryTf: '4h' as const, plan: [{ tf: '4h' as const, role: 'PRIMARY' as const }], barsPerTf: 300, hasScreenshot: false };
   it('nhắc get_orderflow khi có Binance; skeleton agy chỉ có summary + cvd', () => {

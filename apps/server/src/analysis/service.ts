@@ -253,6 +253,33 @@ export class AnalysisService {
     return st;
   }
 
+  /** Order flow hiện tại cho chart (không gắn với phân tích nào). */
+  async orderflowLive(symbol: string) {
+    const sym = normalizeSymbol(symbol);
+    const of = this.opts.binanceOrderflow;
+    if (!of?.has(sym)) throw new ServiceError(`Chưa bật order flow Binance cho ${symbol}`, 404);
+    const snap = await of.live(sym, () => this.chartPrice(sym));
+    const st = of.status(sym);
+    return {
+      source: 'binance' as const,
+      symbol: sym,
+      asOf: snap.asOf,
+      historyMin: snap.historyMin,
+      basis: snap.basis,
+      connected: Boolean(st?.connected && st.synced),
+      notes: snap.notes,
+      levels: snap.levels,
+    };
+  }
+
+  /** Giá chart hiện tại (close nến 1m đang chạy); lỗi → null. */
+  private chartPrice(symbol: string): Promise<number | null> {
+    return this.klines
+      .getKlines({ symbol, tf: '1m', limit: 2 })
+      .then(res => res.candles.at(-1)?.close ?? null)
+      .catch(() => null);
+  }
+
   orderflowSnapshotPath(id: string): string {
     return path.join(this.opts.screenshotDir, `${this.safeId(id)}-orderflow.json`);
   }
@@ -277,10 +304,7 @@ export class AnalysisService {
   private async takeOrderflowSnapshot(id: string, symbol: string): Promise<BinanceOrderflowSnapshot> {
     const of = this.opts.binanceOrderflow;
     if (!of) throw new Error('Order flow Binance chưa bật');
-    const appPrice = await this.klines
-      .getKlines({ symbol, tf: '1m', limit: 2 })
-      .then(res => res.candles.at(-1)?.close ?? null)
-      .catch(() => null);
+    const appPrice = await this.chartPrice(symbol);
     const snap = await of.snapshot(symbol, appPrice);
     fs.writeFileSync(this.orderflowSnapshotPath(id), JSON.stringify(snap));
     return snap;

@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -76,6 +76,22 @@ export interface OrderflowStatus {
 /** Trạng thái collector order flow Binance của symbol. */
 export function fetchOrderflowStatus(symbol: string): Promise<OrderflowStatus> {
   return request(`/api/orderflow/${encodeURIComponent(symbol)}`);
+}
+
+export interface LiveOrderflow {
+  source: 'binance';
+  symbol: string;
+  asOf: number;
+  historyMin: number;
+  basis: number;
+  connected: boolean;
+  notes: string[];
+  levels: OrderflowLevel[];
+}
+
+/** Order flow hiện tại của symbol (vẽ sẵn trên chart). */
+export function fetchLiveOrderflow(symbol: string): Promise<LiveOrderflow> {
+  return request(`/api/orderflow/${encodeURIComponent(symbol)}/levels`);
 }
 
 export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {

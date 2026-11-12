@@ -39,9 +39,17 @@ export function sizeUnit(symbol: string): string {
   return symbol.endsWith('USDT') ? symbol.slice(0, -4) : '';
 }
 
+/** Bản live dùng lại trong khoảng này (nhiều tab / poll dồn). */
+export const LIVE_CACHE_SEC = 10;
+
 export class BinanceOrderflow {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
+  /** Nến 1m spot đã đóng theo symbol: chỉ tải thêm phần mới. */
+  private readonly candleCache = new Map<string, SpotCandle[]>();
+  private readonly liveCache = new Map<string, { at: number; snap: Promise<BinanceOrderflowSnapshot> }>();
+  /** Số request klines đã gọi (để test cache). */
+  klineRequests = 0;
 
   constructor(private readonly opts: BinanceOrderflowOptions) {
     this.fetchImpl = opts.fetchImpl ?? fetch;
@@ -60,13 +68,27 @@ export class BinanceOrderflow {
     return this.opts.collectors[symbol]?.status() ?? null;
   }
 
-  /** Nến 1m spot ĐÃ ĐÓNG trong `hours` giờ tới `now`. */
+  /** Nến 1m spot ĐÃ ĐÓNG trong `hours` giờ tới `now` (cache, chỉ tải phần mới). */
   async spotCandles(symbol: string, now: number, hours = TRADE_WINDOW_H): Promise<SpotCandle[]> {
+    const from = now - hours * 3600;
+    const cached = (this.candleCache.get(symbol) ?? []).filter(c => c.time >= from && c.time + 60 <= now);
+    const lastTime = cached.at(-1)?.time;
+    // Đã có nến đóng mới nhất → không gọi Binance.
+    if (cached.length && cached[0]!.time < from + 60 && lastTime !== undefined && lastTime + 120 > now) return cached;
+    const startSec = cached.length && cached[0]!.time < from + 60 ? lastTime! + 60 : from;
+    const fresh = await this.fetchSpotCandles(symbol, startSec, now);
+    const merged = startSec === from ? fresh : [...cached, ...fresh.filter(c => c.time > lastTime!)];
+    this.candleCache.set(symbol, merged);
+    return merged;
+  }
+
+  private async fetchSpotCandles(symbol: string, fromSec: number, now: number): Promise<SpotCandle[]> {
     const out: SpotCandle[] = [];
-    let start = (now - hours * 3600) * 1000;
+    let start = fromSec * 1000;
     const end = now * 1000;
     while (start < end) {
       const params = new URLSearchParams({ symbol, interval: '1m', startTime: String(start), endTime: String(end), limit: '1000' });
+      this.klineRequests++;
       const res = await this.fetchImpl(`${BINANCE_SPOT_REST}/api/v3/klines?${params}`, { signal: AbortSignal.timeout(15_000) });
       if (!res.ok) throw new Error(`Binance spot klines ${res.status}`);
       const rows = (await res.json()) as RawSpotKline[];
@@ -76,6 +98,17 @@ export class BinanceOrderflow {
       if (rows.length < 1000) break;
     }
     return out.filter(c => c.time + 60 <= now);
+  }
+
+  /** Order flow hiện tại cho chart (dùng lại bản tính trong LIVE_CACHE_SEC giây). */
+  live(symbol: string, appPrice: () => Promise<number | null>): Promise<BinanceOrderflowSnapshot> {
+    const now = this.now();
+    const hit = this.liveCache.get(symbol);
+    if (hit && now - hit.at < LIVE_CACHE_SEC) return hit.snap;
+    const snap = appPrice().then(p => this.snapshot(symbol, p));
+    this.liveCache.set(symbol, { at: now, snap });
+    snap.catch(() => this.liveCache.delete(symbol));
+    return snap;
   }
 
   /** Bản tóm tắt order flow tại `now`; `appPrice` = giá chart lúc đó (để tính basis spot → chart). */

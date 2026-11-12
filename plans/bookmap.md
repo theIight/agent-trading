@@ -180,3 +180,18 @@
 **Kỹ thuật:** `config.ts` đọc `BOOKMAP_IMAGE_<SYMBOL>_<HTF|LTF>`; `analysis/bookmapSource.ts` (resolve path, stat, copy — test với thư mục tạm); service: `prepareBookmap` chỉ kiểm tra + lưu offset, copy ảnh trong `pump()` trước khi gọi runner; route mới; web: thay `BookmapSlot` upload bằng thumbnail `<img src="/api/bookmap/XAUUSD/htf?t=...">`, bỏ state ảnh/FileReader.
 
 **Acceptance:** cấu hình 4 path → tick là chạy được, không chọn file; ảnh lưu kèm phân tích là bản tại lúc job chạy; path sai → thông báo trong panel và job lỗi rõ; test service copy + mtime; SPEC/README/.env.example cập nhật; ảnh UI.
+
+## 10. Độ dày vạch theo khối lượng (đã duyệt 2026-11-12)
+
+**Bối cảnh:** người dùng muốn vạch tường dày/mỏng theo số lượng hợp đồng, giống cách Bookmap thể hiện độ lớn thanh khoản.
+
+**Spec:**
+1. Áp dụng cho vạch tường (ASK_WALL / BID_WALL) của cả hai nguồn: ảnh Bookmap và Binance.
+2. Độ dày tỉ lệ tuyến tính với `size / size lớn nhất` trong cùng nhóm (cùng ảnh với Bookmap; cả sổ lệnh với Binance, giống nhóm dùng cho ngưỡng 40%): `width = 1 + 5 × ratio` → từ 1px tới 6px. Tường lớn nhất luôn dày 6px.
+3. Vạch tường đổi từ nét chấm sang **dải liền** (nét chấm dày nhìn rối), vẫn mờ 30%, nằm sau nến. POC giữ nét chấm mảnh 1px màu tím (POC là volume đã khớp, khác đơn vị với tường).
+4. Nhãn vẫn chỉ là con số khối lượng, cỡ chữ không đổi, đặt giữa dải.
+5. Giữ nguyên bộ lọc: ẩn tường < 40% tường lớn nhất, tối đa 3 tường mỗi phía.
+
+**Kỹ thuật:** `OrderflowLineItem` thêm `width` (px) và `dashed`; `buildOrderflowLines` tính width (pure, test); `OverlayPrimitive` vẽ theo `width`/`dashed`. Hằng `OF_MIN_WIDTH = 1`, `OF_MAX_WIDTH = 6` trong `model.ts`.
+
+**Acceptance:** test model: tường lớn nhất width 6, tường bằng 50% → 3.5, POC width 1 nét chấm; ảnh chụp chart BTC (Binance) cho thấy tường 58 BTC dày hơn hẳn tường 27 BTC; SPEC mục Order flow trên chart cập nhật; typecheck/lint/test xanh.
