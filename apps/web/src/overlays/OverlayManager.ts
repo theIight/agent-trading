@@ -1,8 +1,8 @@
 import { LineStyle, createSeriesMarkers, type IPriceLine, type ISeriesMarkersPluginApi, type Time, type UTCTimestamp } from 'lightweight-charts';
-import type { AnalysisResult, OrderflowLevel } from '@wca/shared';
+import type { AnalysisResult } from '@wca/shared';
 import type { ChartController } from '../chart/ChartController.ts';
 import { THEMES, type ThemeName } from '../chart/theme.ts';
-import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, type LayerVisibility, type OverlayModel } from './model.ts';
+import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, type LayerVisibility, type LiveOrderflowView, type OverlayModel } from './model.ts';
 import { OverlayPrimitive } from './OverlayPrimitive.ts';
 
 export interface SetupView {
@@ -23,7 +23,7 @@ export class OverlayManager {
   private priceLines: IPriceLine[] = [];
   private model: OverlayModel | null = null;
   private setupView: SetupView = { selectedSetup: null, showReferenceSetups: false };
-  private liveOrderflow: { symbol: string; levels: OrderflowLevel[] } | null = null;
+  private liveOrderflow: (LiveOrderflowView & { symbol: string }) | null = null;
 
   constructor(private readonly ctrl: ChartController) {
     ctrl.candleSeries.attachPrimitive(this.primitive);
@@ -50,7 +50,7 @@ export class OverlayManager {
   }
 
   /** Order flow hiện tại (live) theo symbol; null = không có. */
-  setLiveOrderflow(live: { symbol: string; levels: OrderflowLevel[] } | null): void {
+  setLiveOrderflow(live: (LiveOrderflowView & { symbol: string }) | null): void {
     this.liveOrderflow = live;
     this.render();
   }
@@ -67,7 +67,7 @@ export class OverlayManager {
     // Chỉ vẽ phân tích của đúng symbol đang xem: hình vẽ của symbol cũ (vd BTC 70k)
     // vừa sai ngữ cảnh vừa kéo thang giá khiến không thấy nến symbol mới (vd NEAR 3.5).
     const analysis = this.analysis && this.analysis.symbol === this.ctrl.getSymbol() ? this.analysis : null;
-    const live = this.liveOrderflow?.symbol === this.ctrl.getSymbol() ? this.liveOrderflow.levels : null;
+    const live = this.liveOrderflow?.symbol === this.ctrl.getSymbol() ? this.liveOrderflow : null;
     const model = buildOverlayModel(analysis, candles, tf, { layers: this.layers, ...this.setupView, liveOrderflow: live });
     this.model = model;
 

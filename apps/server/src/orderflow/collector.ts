@@ -115,6 +115,14 @@ export class BookCollector {
     return rows.slice(start).map(r => JSON.parse(r.data) as BookSample);
   }
 
+  /** Mọi mẫu trong [from, to] (kể cả qua khoảng mất dữ liệu). */
+  rawSamples(from: number, to: number): BookSample[] {
+    const rows = this.opts.db
+      .prepare('SELECT t, data FROM book_samples WHERE symbol = ? AND t >= ? AND t <= ? ORDER BY t')
+      .all(this.opts.symbol, from, to) as SampleRow[];
+    return rows.map(r => JSON.parse(r.data) as BookSample);
+  }
+
   trades(from: number, to: number): BigTrade[] {
     return this.opts.db
       .prepare('SELECT t, price, qty, side FROM big_trades WHERE symbol = ? AND t >= ? AND t <= ? ORDER BY t')

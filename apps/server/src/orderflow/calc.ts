@@ -1,4 +1,4 @@
-import type { OrderflowLevel } from '@wca/shared';
+import type { OrderflowLevel, WallSegment } from '@wca/shared';
 import type { BookSample } from './localBook.ts';
 
 // Tính order flow từ dữ liệu Binance (thuần, không I/O): tường thanh khoản bền, volume profile, CVD, hấp thụ.
@@ -413,4 +413,103 @@ export function cvdText(cvd: CvdStats | null, unit: string): string {
     `CVD 24h ${sign(cvd.total)} ${unit}; 4h ${sign(cvd.last4h)} (giá ${sign(cvd.priceChange4h)}); 1h ${sign(cvd.last1h)} (giá ${sign(cvd.priceChange1h)})` +
     (cvd.divergence ? `. ${cvd.divergence}` : '')
   );
+}
+
+export interface WallSegmentOptions {
+  bucket: number;
+  /** Ngưỡng khối lượng tối thiểu để tính là tường (ORDERFLOW_WALL_MIN_<SYMBOL>). */
+  minSize: number;
+  /** Bucket ≥ k × median cùng phía mới là tường. */
+  k?: number;
+  /** Tường còn tồn tại khi size ≥ tỉ lệ này × đỉnh của nó. */
+  persistRatio?: number;
+  /** Số mẫu hụt liên tiếp cho phép. */
+  gapTolerance?: number;
+  /** Bỏ tường đứng ngắn hơn số phút này. */
+  minDurationMin?: number;
+  /** Hai mẫu cách nhau quá số giây này = mất dữ liệu → đóng mọi tường. */
+  maxGapSec?: number;
+}
+
+interface OpenWall {
+  side: 'BID' | 'ASK';
+  price: number;
+  start: number;
+  lastSeen: number;
+  firstMiss: number | null;
+  peak: number;
+  misses: number;
+}
+
+/**
+ * Lịch sử tường từ các mẫu sổ lệnh: mỗi tường là một đoạn [start, end]. Khi tường biến mất (hoặc còn < persistRatio × đỉnh),
+ * giá chạm bucket trong khoảng [lần cuối còn thấy, lần đầu hụt] → `consumed` (end = nến 1m chạm đầu tiên), không chạm → `pulled`.
+ */
+export function findWallSegments(samples: readonly BookSample[], candles: readonly SpotCandle[], opts: WallSegmentOptions): WallSegment[] {
+  const { bucket, minSize, k = 3, persistRatio = 0.5, gapTolerance = 1, minDurationMin = 5, maxGapSec = 300 } = opts;
+  const open = new Map<string, OpenWall>();
+  const out: WallSegment[] = [];
+  const sorted = [...samples].sort((a, b) => a.t - b.t);
+  const latest = sorted.at(-1);
+
+  const touched = (w: OpenWall, from: number, to: number, mids: number[]): number | null => {
+    const hit = (lo: number, hi: number) => (w.side === 'BID' ? lo <= w.price + bucket : hi >= w.price);
+    for (const c of candles) {
+      if (c.time + 60 <= from || c.time > to) continue;
+      if (hit(c.low, c.high)) return Math.max(from, c.time);
+    }
+    return mids.some(m => hit(m, m)) ? to : null;
+  };
+  const close = (w: OpenWall, mids: number[]) => {
+    const to = w.firstMiss ?? w.lastSeen;
+    const at = touched(w, w.lastSeen, to, mids);
+    const end = at ?? w.lastSeen;
+    if (end - w.start >= minDurationMin * 60) {
+      out.push({ side: w.side, sourcePrice: w.price, start: w.start, end, peakSize: r3(w.peak), status: at !== null ? 'consumed' : 'pulled' });
+    }
+  };
+
+  let prevT: number | null = null;
+  let prevMid: number | null = null;
+  for (const s of sorted) {
+    if (prevT !== null && s.t - prevT > maxGapSec) {
+      for (const w of open.values()) close(w, prevMid !== null ? [prevMid] : []);
+      open.clear();
+    }
+    for (const side of ['BID', 'ASK'] as const) {
+      const levels = side === 'BID' ? s.bids : s.asks;
+      const sizes = new Map(levels);
+      const th = Math.max(k * median(levels.map(l => l[1])), minSize);
+      for (const [key, w] of open) {
+        if (w.side !== side) continue;
+        const q = sizes.get(w.price) ?? 0;
+        if (q >= persistRatio * w.peak && q > 0) {
+          w.lastSeen = s.t;
+          w.peak = Math.max(w.peak, q);
+          w.misses = 0;
+          w.firstMiss = null;
+        } else {
+          w.misses += 1;
+          w.firstMiss ??= s.t;
+          if (w.misses > gapTolerance) {
+            close(w, [s.mid, ...(prevMid !== null ? [prevMid] : [])]);
+            open.delete(key);
+          }
+        }
+      }
+      for (const [price, q] of levels) {
+        const key = `${side}:${price}`;
+        if (q >= th && !open.has(key)) open.set(key, { side, price, start: s.t, lastSeen: s.t, firstMiss: null, peak: q, misses: 0 });
+      }
+    }
+    prevT = s.t;
+    prevMid = s.mid;
+  }
+  for (const w of open.values()) {
+    // Hụt trong ngưỡng nhiễu ở mẫu cuối → vẫn coi là còn tồn tại.
+    if (latest && latest.t - w.start >= minDurationMin * 60) {
+      out.push({ side: w.side, sourcePrice: w.price, start: w.start, end: null, peakSize: r3(w.peak), status: 'active' });
+    }
+  }
+  return out.sort((a, b) => a.start - b.start);
 }

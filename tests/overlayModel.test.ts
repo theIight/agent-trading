@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisResult, Candle, TradePlan, TradeSetup } from '@wca/shared';
-import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, EMPTY_MODEL, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
+import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, EMPTY_MODEL, buildWallSegmentLines, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
 
 const H4 = 14400;
 const T0 = 1_790_000_000 - (1_790_000_000 % H4);
@@ -297,16 +297,37 @@ describe('layer Order flow (Bookmap)', () => {
       { kind: 'BID_WALL', sourcePrice: 73000, price: 72973, size: 58, sizeSource: 'BOOK', strength: 1, note: '' },
       { kind: 'BID_WALL', sourcePrice: 72880, price: 72853, size: 29, sizeSource: 'BOOK', strength: 0.6, note: '' },
     ] as NonNullable<AnalysisResult['orderflow']>['levels'];
-    const alone = buildOverlayModel(null, candles, '4h', { liveOrderflow: live });
+    const alone = buildOverlayModel(null, candles, '4h', { liveOrderflow: { levels: live } });
     expect(alone.orderflowLines.map(l => [l.label, l.price, l.width])).toEqual([
       ['58', 72973, 6],
       ['29', 72853, 3.5],
     ]);
     expect(alone.markers).toEqual([]);
-    const withAnalysis = buildOverlayModel(analysis({ orderflow }), candles, '4h', { liveOrderflow: live });
+    const withAnalysis = buildOverlayModel(analysis({ orderflow }), candles, '4h', { liveOrderflow: { levels: live } });
     expect(withAnalysis.orderflowLines.map(l => l.price)).toEqual([72973, 72853]);
-    expect(buildOverlayModel(null, candles, '4h', { liveOrderflow: live, layers: { ...ALL_LAYERS_ON, orderflow: false } }).orderflowLines).toEqual([]);
+    expect(buildOverlayModel(null, candles, '4h', { liveOrderflow: { levels: live }, layers: { ...ALL_LAYERS_ON, orderflow: false } }).orderflowLines).toEqual([]);
     expect(buildOverlayModel(null, candles, '4h')).toEqual(EMPTY_MODEL);
+  });
+
+  it('lịch sử tường: còn tồn tại kéo tới mép phải, bị quét dừng + ×, bị rút nét chấm mờ không nhãn', () => {
+    const seg = (side: 'BID' | 'ASK', price: number, peakSize: number, status: 'active' | 'consumed' | 'pulled', start: number, end: number | null) =>
+      ({ side, sourcePrice: price + 20, price, start, end, peakSize, status });
+    const lines = buildWallSegmentLines([
+      seg('BID', 72980, 60, 'active', 100, null),
+      seg('BID', 72860, 20, 'active', 100, null), // < 40% × 60 → ẩn
+      seg('ASK', 74000, 30, 'consumed', 200, 900),
+      seg('ASK', 74100, 10, 'consumed', 200, 950), // đỉnh < 40% × 60 → ẩn
+      seg('BID', 73100, 45, 'pulled', 300, 700),
+    ]);
+    expect(lines.map(l => [l.price, l.label, l.width, l.dashed, l.t1, l.t2, l.endMark ?? false])).toEqual([
+      [72980, '60', 6, false, 100, null, false],
+      [74000, '30', 3.5, false, 200, 900, true],
+      [73100, '', 1, true, 300, 700, false],
+    ]);
+    const model = buildOverlayModel(null, candles, '4h', {
+      liveOrderflow: { levels: [{ kind: 'POC', price: 74300, strength: 0.7, note: '' }], wallSegments: [seg('BID', 72980, 60, 'active', 100, null)] },
+    });
+    expect(model.orderflowLines.map(l => l.label)).toEqual(['60', 'POC']);
   });
 
   it('tắt layer hoặc không có orderflow → không vẽ', () => {

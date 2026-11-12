@@ -97,7 +97,7 @@ export function ChartView({ onStatus, onReady }: Props) {
   }, [liveOfSymbol, watchOrderflow]);
 
   useEffect(() => {
-    overlayRef.current?.setLiveOrderflow(liveOf ? { symbol: liveOf.symbol, levels: liveOf.levels } : null);
+    overlayRef.current?.setLiveOrderflow(liveOf ? { symbol: liveOf.symbol, levels: liveOf.levels, wallSegments: liveOf.wallSegments } : null);
   }, [liveOf]);
 
   useEffect(() => {

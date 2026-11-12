@@ -109,6 +109,8 @@ export const config = {
   orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1 }),
   /** Tổng lệnh lớn chủ động tại một bucket (2 giờ) để xét hấp thụ, theo `ORDERFLOW_ABSORB_<SYMBOL>`. */
   orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8 }),
+  /** Khối lượng tối thiểu để một mức tính là tường trong lịch sử tường trên chart, theo `ORDERFLOW_WALL_MIN_<SYMBOL>`. */
+  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8 }),
   orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
   orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),

@@ -110,6 +110,7 @@ export async function buildApp(deps: AppDeps = {}) {
         collectors: Object.fromEntries(collectors.map(c => [c.symbol, c])),
         buckets: cfg.orderflowBuckets,
         absorptionQty: cfg.orderflowAbsorb,
+        wallMin: cfg.orderflowWallMin,
       })
     : undefined;
   for (const c of collectors) c.start();

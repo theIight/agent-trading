@@ -97,3 +97,25 @@ export function checkStaleness(inp: StalenessInput): { measuredOffset?: number; 
   }
   return { measuredOffset: round(sorted[0]!.bookmapPrice - ref, 2), warnings };
 }
+
+/** Trạng thái một tường trong lịch sử sổ lệnh (order flow Binance). */
+export type WallSegmentStatus = 'active' | 'consumed' | 'pulled';
+
+/**
+ * Một tường thanh khoản theo thời gian: `active` = còn trong sổ lệnh, `consumed` = giá quét qua / hấp thụ,
+ * `pulled` = rút khi giá chưa chạm (thường là lệnh ảo).
+ */
+export interface WallSegment {
+  side: 'BID' | 'ASK';
+  /** Cận dưới bucket trên sổ lệnh spot. */
+  sourcePrice: number;
+  /** Giá chart (sourcePrice − basis). Server điền khi trả API. */
+  price?: number;
+  /** Unix giây. */
+  start: number;
+  /** Unix giây lúc bị quét / rút; null = còn tồn tại. */
+  end: number | null;
+  /** Khối lượng lớn nhất tường đạt được. */
+  peakSize: number;
+  status: WallSegmentStatus;
+}

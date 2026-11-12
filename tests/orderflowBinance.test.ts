@@ -15,6 +15,7 @@ import {
   cvdStats,
   findAbsorption,
   findWalls,
+  findWallSegments,
   profileBucket,
   volumeProfile,
   type SpotCandle,
@@ -160,6 +161,49 @@ describe('buildSnapshot', () => {
     expect(snap.basis).toBe(0);
     expect(snap.walls).toEqual([]);
     expect(snap.notes.join(' ')).toMatch(/Chưa có dữ liệu sổ lệnh.*basis 0/);
+  });
+});
+
+describe('findWallSegments (lịch sử tường)', () => {
+  // Mẫu mỗi 10s từ t=0; mid 73050; nến 1m spot theo low/high cho trước.
+  const T0 = 1_000_020;
+  const mk = (n: number, f: (i: number) => { bids?: [number, number][]; asks?: [number, number][] }): BookSample[] =>
+    Array.from({ length: n }, (_, i) => ({
+      t: T0 + i * 10,
+      mid: 73050,
+      bids: [[72950, 1], [72960, 1], [72970, 1], ...(f(i).bids ?? [])],
+      asks: [[73150, 1], [73160, 1], [73170, 1], ...(f(i).asks ?? [])],
+    }));
+  const flat = (from: number, minutes: number, low: number, high: number) =>
+    Array.from({ length: minutes }, (_, i) => c(from + i * 60, low, high, 1, 0.5));
+  const opts = { bucket: 10, minSize: 8 };
+
+  it('tường bị giá quét → consumed, end = lúc giá chạm (không sớm hơn lần cuối còn thấy)', () => {
+    // Tường mua 73000 (40 BTC) đứng 10 phút rồi biến mất; nến phút thứ 10 chạm 73005.
+    const samples = mk(90, i => ({ bids: i < 60 ? [[73000, 40]] : [] }));
+    const candles = [...flat(T0 - 20, 10, 73030, 73080), c(T0 - 20 + 600, 73005, 73060, 1, 0.5), ...flat(T0 - 20 + 660, 5, 73020, 73080)];
+    const segs = findWallSegments(samples, candles, opts);
+    // Nến chạm mở lúc T0+580, tường còn thấy tới T0+590 → end không sớm hơn lần cuối còn thấy.
+    expect(segs).toEqual([{ side: 'BID', sourcePrice: 73000, start: T0, end: T0 + 590, peakSize: 40, status: 'consumed' }]);
+  });
+
+  it('tường biến mất khi giá chưa chạm → pulled; đang còn → active; ngắn < 5 phút → bỏ', () => {
+    const samples = mk(90, i => ({
+      bids: i < 60 ? [[73000, 40]] : [],
+      asks: [[73300, 30], ...(i >= 10 && i < 20 ? ([[73400, 50]] as [number, number][]) : [])],
+    }));
+    const candles = flat(T0 - 20, 16, 73030, 73080);
+    const segs = findWallSegments(samples, candles, opts);
+    expect(segs.map(s => [s.side, s.sourcePrice, s.status, s.end])).toEqual([
+      ['BID', 73000, 'pulled', T0 + 590],
+      ['ASK', 73300, 'active', null],
+    ]);
+  });
+
+  it('dưới ngưỡng tối thiểu không tính; hụt 1 mẫu (nhiễu) không cắt tường', () => {
+    const samples = mk(60, i => ({ bids: [[73000, i === 30 ? 0 : 40]], asks: [[73300, 6]] }));
+    const segs = findWallSegments(samples, [], { bucket: 10, minSize: 8, k: 3 });
+    expect(segs).toEqual([{ side: 'BID', sourcePrice: 73000, start: T0, end: null, peakSize: 40, status: 'active' }]);
   });
 });
 
@@ -318,6 +362,7 @@ function setup(behavior: (req: AgentRunRequest, hooks: AgentRunHooks, svc: Analy
     collectors: {
       BTCUSDT: {
         samples: () => bookSamples,
+        rawSamples: (from: number, to: number) => bookSamples.filter(x => x.t >= from && x.t <= to),
         trades: () => [],
         status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: now - 3600, lastSampleAt: now, historyMin: 60, spotPrice: 103 }),
       },
@@ -387,7 +432,7 @@ describe('order flow live cho chart', () => {
       return new Response(JSON.stringify(rows));
     }) as typeof fetch;
     const of = new BinanceOrderflow({
-      collectors: { BTCUSDT: { samples: () => [], trades: () => [], status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }) } },
+      collectors: { BTCUSDT: { samples: () => [], rawSamples: () => [], trades: () => [], status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }) } },
       buckets: { BTCUSDT: 10 },
       absorptionQty: {},
       fetchImpl,
@@ -405,6 +450,26 @@ describe('order flow live cho chart', () => {
     expect(next[0]!.time).toBeGreaterThanOrEqual(now - 86400);
     expect(new Set(next.map(c => c.time)).size).toBe(next.length);
 
+    // Mẫu sổ lệnh: lần sau chỉ đọc mẫu mới.
+    const reads: [number, number][] = [];
+    const store: BookSample[] = [{ t: now - 100, mid: 1, bids: [], asks: [] }];
+    const of2 = new BinanceOrderflow({
+      collectors: {
+        BTCUSDT: {
+          samples: () => [],
+          rawSamples: (from: number, to: number) => (reads.push([from, to]), store.filter(x => x.t >= from && x.t <= to)),
+          trades: () => [],
+          status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
+        },
+      },
+      buckets: {},
+      absorptionQty: {},
+    });
+    expect(of2.historySamples('BTCUSDT', now)).toHaveLength(1);
+    store.push({ t: now + 5, mid: 1, bids: [], asks: [] });
+    expect(of2.historySamples('BTCUSDT', now + 10).map(x => x.t)).toEqual([now - 100, now + 5]);
+    expect(reads[1]).toEqual([now - 99, now + 10]);
+
     let priceCalls = 0;
     const price = async () => (priceCalls++, 1.4);
     const a = await of.live('BTCUSDT', price);
@@ -416,11 +481,12 @@ describe('order flow live cho chart', () => {
     expect(priceCalls).toBe(2);
   });
 
-  it('service.orderflowLive trả levels đã quy đổi; symbol không bật → 404', async () => {
+  it('service.orderflowLive trả levels + lịch sử tường đã quy đổi; symbol không bật → 404', async () => {
     const { service } = setup(async () => ({ ok: true }));
     const live = await service.orderflowLive('btcusdt');
     expect(live).toMatchObject({ source: 'binance', symbol: 'BTCUSDT', basis: 3, connected: true });
     expect(live.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 77 });
+    expect(live.wallSegments).toEqual([expect.objectContaining({ side: 'BID', sourcePrice: 80, price: 77, status: 'active', end: null, peakSize: 50 })]);
     await expect(service.orderflowLive('ETHUSDT')).rejects.toThrow(/Chưa bật/);
   });
 });

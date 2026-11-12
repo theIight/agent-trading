@@ -6,6 +6,7 @@ import {
   type AnalysisResult,
   type Candle,
   type Timeframe,
+  type WallSegment,
 } from '@wca/shared';
 
 // Chuyển AnalysisResult → mô hình vẽ (toạ độ thời gian/giá), độc lập với canvas để test được.
@@ -48,6 +49,9 @@ export const COLORS = {
   ofBidText: 'rgba(38,166,154,0.85)',
   ofPoc: 'rgba(171,71,188,0.3)',
   ofPocText: 'rgba(186,104,200,0.85)',
+  /** Tường bị rút (lệnh ảo): nét chấm rất mờ. */
+  ofAskPulled: 'rgba(239,83,80,0.35)',
+  ofBidPulled: 'rgba(38,166,154,0.35)',
   phaseFills: ['rgba(255,193,7,0.06)', 'rgba(156,39,176,0.06)', 'rgba(0,188,212,0.06)', 'rgba(76,175,80,0.06)', 'rgba(255,87,34,0.06)'],
 };
 
@@ -115,9 +119,17 @@ export interface OrderflowLineItem {
   label: string;
   /** Độ dày (px): tường dày theo khối lượng, POC mảnh. */
   width: number;
-  /** POC: nét chấm; tường: dải liền. */
+  /** POC / tường bị rút: nét chấm; tường: dải liền. */
   dashed: boolean;
+  /** Đoạn theo thời gian (unix giây): thiếu `t1` = ngang toàn chart; `t2` null = tới mép phải. */
+  t1?: number;
+  t2?: number | null;
+  /** Dấu × ở cuối đoạn (tường bị quét). */
+  endMark?: boolean;
 }
+
+/** Tối đa số đoạn tường đã bị quét / bị rút hiển thị (gần nhất). */
+export const OF_MAX_ENDED_SEGMENTS = 6;
 
 /** Độ dày vạch tường: OF_MIN_WIDTH (rất nhỏ) → OF_MAX_WIDTH (tường lớn nhất cùng nhóm). */
 export const OF_MIN_WIDTH = 1;
@@ -203,10 +215,21 @@ export interface BuildOptions {
   /** Khi đứng ngoài: vẫn vẽ setup tham khảo. */
   showReferenceSetups?: boolean;
   /** Order flow hiện tại (live) của symbol đang xem: có thì vẽ thay cho order flow của phân tích, kể cả khi chưa có phân tích. */
-  liveOrderflow?: OrderflowLevels | null;
+  liveOrderflow?: LiveOrderflowView | null;
 }
 
 type OrderflowLevels = NonNullable<AnalysisResult['orderflow']>['levels'];
+
+/** Order flow live: mức (POC…) + lịch sử tường; có `wallSegments` thì tường vẽ theo đoạn thời gian. */
+export interface LiveOrderflowView {
+  levels: OrderflowLevels;
+  wallSegments?: WallSegment[];
+}
+
+function liveLines(live: LiveOrderflowView): OrderflowLineItem[] {
+  if (!live.wallSegments) return buildOrderflowLines(live.levels);
+  return [...buildWallSegmentLines(live.wallSegments), ...buildOrderflowLines(live.levels.filter(l => l.kind === 'POC'))];
+}
 
 interface PositionTool {
   direction: 'LONG' | 'SHORT';
@@ -324,7 +347,7 @@ export function buildOverlayModel(
   if (!candles.length) return EMPTY_MODEL;
   if (!analysis) {
     if (!opts.liveOrderflow || !layers.orderflow) return EMPTY_MODEL;
-    return { ...EMPTY_MODEL, orderflowLines: buildOrderflowLines(opts.liveOrderflow) };
+    return { ...EMPTY_MODEL, orderflowLines: liveLines(opts.liveOrderflow) };
   }
   const curSec = tfSeconds(currentTf);
   const visibleTf = (tf: Timeframe) => opts.showLowerTfItems || tfSeconds(tf) >= curSec;
@@ -403,8 +426,8 @@ export function buildOverlayModel(
     }
   }
 
-  const ofLevels = opts.liveOrderflow ?? analysis.orderflow?.levels;
-  if (layers.orderflow && ofLevels) model.orderflowLines = buildOrderflowLines(ofLevels);
+  if (layers.orderflow && opts.liveOrderflow) model.orderflowLines = liveLines(opts.liveOrderflow);
+  else if (layers.orderflow && analysis.orderflow) model.orderflowLines = buildOrderflowLines(analysis.orderflow.levels);
 
   if (layers.forecast) {
     const ranked = [...analysis.scenarios].sort((a, b) => b.probability - a.probability);
@@ -507,4 +530,58 @@ export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[
     out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC', width: 1, dashed: true });
   }
   return out;
+}
+
+/**
+ * Lịch sử tường (Binance) thành các đoạn: tường còn tồn tại (≥ 40% tường lớn nhất đang tồn tại, ≤ 3 mỗi phía) kéo tới mép phải;
+ * tường bị quét (đỉnh ≥ 40% tường lớn nhất, ≤ 6 gần nhất) dừng ở lúc bị quét + dấu ×; tường bị rút: nét chấm mờ, không nhãn.
+ * Độ dày theo khối lượng đỉnh so với tường lớn nhất được vẽ.
+ */
+export function buildWallSegmentLines(segments: readonly WallSegment[]): OrderflowLineItem[] {
+  const placed = segments.filter(s => s.price !== undefined);
+  const maxActive = Math.max(0, ...placed.filter(s => s.status === 'active').map(s => s.peakSize));
+  const maxAll = Math.max(0, ...placed.map(s => s.peakSize));
+  const active: WallSegment[] = [];
+  for (const side of ['ASK', 'BID'] as const) {
+    active.push(
+      ...placed
+        .filter(s => s.status === 'active' && s.side === side && s.peakSize >= OF_MIN_WALL_RATIO * maxActive)
+        .sort((a, b) => b.peakSize - a.peakSize)
+        .slice(0, OF_MAX_WALLS_PER_SIDE),
+    );
+  }
+  const ended = (status: WallSegment['status']) =>
+    placed
+      .filter(s => s.status === status && s.peakSize >= OF_MIN_WALL_RATIO * maxAll)
+      .sort((a, b) => (b.end ?? 0) - (a.end ?? 0))
+      .slice(0, OF_MAX_ENDED_SEGMENTS);
+  const consumed = ended('consumed');
+  const pulled = ended('pulled');
+  const maxDrawn = Math.max(0, ...[...active, ...consumed].map(s => s.peakSize));
+  const width = (size: number) => Math.round((OF_MIN_WIDTH + (OF_MAX_WIDTH - OF_MIN_WIDTH) * (maxDrawn ? size / maxDrawn : 0)) * 10) / 10;
+  const solid = (s: WallSegment): OrderflowLineItem => ({
+    price: s.price!,
+    color: s.side === 'ASK' ? COLORS.ofAsk : COLORS.ofBid,
+    textColor: s.side === 'ASK' ? COLORS.ofAskText : COLORS.ofBidText,
+    label: fmtSize(s.peakSize),
+    width: width(s.peakSize),
+    dashed: false,
+    t1: s.start,
+    t2: s.end,
+    endMark: s.status === 'consumed',
+  });
+  return [
+    ...active.map(solid),
+    ...consumed.map(solid),
+    ...pulled.map(s => ({
+      price: s.price!,
+      color: s.side === 'ASK' ? COLORS.ofAskPulled : COLORS.ofBidPulled,
+      textColor: 'transparent',
+      label: '',
+      width: 1,
+      dashed: true,
+      t1: s.start,
+      t2: s.end,
+    })),
+  ];
 }

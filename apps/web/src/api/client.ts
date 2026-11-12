@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -87,6 +87,8 @@ export interface LiveOrderflow {
   connected: boolean;
   notes: string[];
   levels: OrderflowLevel[];
+  /** Lịch sử tường 24h (giá đã quy đổi). */
+  wallSegments?: WallSegment[];
 }
 
 /** Order flow hiện tại của symbol (vẽ sẵn trên chart). */

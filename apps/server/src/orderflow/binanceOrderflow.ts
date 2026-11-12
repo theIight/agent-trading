@@ -1,10 +1,13 @@
-import { buildSnapshot, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
+import type { WallSegment } from '@wca/shared';
+import { buildSnapshot, findWallSegments, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
+import type { BookSample } from './localBook.ts';
 import { BINANCE_SPOT_REST, BookCollector, type CollectorStatus } from './collector.ts';
 
 // Order flow Binance spot: quản lý collector theo symbol, lấy nến 1m spot (taker buy) và dựng bản tóm tắt cho agent.
 
 export interface OrderflowSource {
   samples(from: number, to: number): ReturnType<BookCollector['samples']>;
+  rawSamples(from: number, to: number): BookSample[];
   trades(from: number, to: number): ReturnType<BookCollector['trades']>;
   status(): CollectorStatus;
 }
@@ -13,6 +16,8 @@ export interface BinanceOrderflowOptions {
   collectors: Record<string, OrderflowSource>;
   buckets: Record<string, number>;
   absorptionQty: Record<string, number>;
+  /** Ngưỡng khối lượng tối thiểu của tường (lịch sử tường), theo symbol. */
+  wallMin?: Record<string, number>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -41,13 +46,22 @@ export function sizeUnit(symbol: string): string {
 
 /** Bản live dùng lại trong khoảng này (nhiều tab / poll dồn). */
 export const LIVE_CACHE_SEC = 10;
+/** Cửa sổ lịch sử tường trên chart. */
+export const WALL_HISTORY_H = 24;
+
+export interface LiveOrderflowSnapshot extends BinanceOrderflowSnapshot {
+  /** Lịch sử tường 24h (giá đã quy đổi theo basis hiện tại). */
+  wallSegments: WallSegment[];
+}
 
 export class BinanceOrderflow {
   private readonly fetchImpl: typeof fetch;
   private readonly now: () => number;
   /** Nến 1m spot đã đóng theo symbol: chỉ tải thêm phần mới. */
   private readonly candleCache = new Map<string, SpotCandle[]>();
-  private readonly liveCache = new Map<string, { at: number; snap: Promise<BinanceOrderflowSnapshot> }>();
+  private readonly liveCache = new Map<string, { at: number; snap: Promise<LiveOrderflowSnapshot> }>();
+  /** Mẫu sổ lệnh đã parse theo symbol: chỉ đọc thêm mẫu mới từ SQLite. */
+  private readonly sampleCache = new Map<string, BookSample[]>();
   /** Số request klines đã gọi (để test cache). */
   klineRequests = 0;
 
@@ -100,12 +114,39 @@ export class BinanceOrderflow {
     return out.filter(c => c.time + 60 <= now);
   }
 
+  /** Mẫu sổ lệnh trong `hours` giờ tới `now` (cache, chỉ đọc mẫu mới). */
+  historySamples(symbol: string, now: number, hours = WALL_HISTORY_H): BookSample[] {
+    const src = this.opts.collectors[symbol];
+    if (!src) return [];
+    const from = now - hours * 3600;
+    const cached = (this.sampleCache.get(symbol) ?? []).filter(s => s.t >= from);
+    const lastT = cached.at(-1)?.t;
+    const fresh = src.rawSamples(lastT !== undefined ? lastT + 1 : from, now);
+    const merged = [...cached, ...fresh];
+    this.sampleCache.set(symbol, merged);
+    return merged;
+  }
+
+  /** Lịch sử tường 24h (chưa quy đổi giá). */
+  async wallSegments(symbol: string, now: number): Promise<WallSegment[]> {
+    const candles = await this.spotCandles(symbol, now);
+    return findWallSegments(this.historySamples(symbol, now), candles, {
+      bucket: this.opts.buckets[symbol] ?? 10,
+      minSize: this.opts.wallMin?.[symbol] ?? 0,
+    });
+  }
+
   /** Order flow hiện tại cho chart (dùng lại bản tính trong LIVE_CACHE_SEC giây). */
-  live(symbol: string, appPrice: () => Promise<number | null>): Promise<BinanceOrderflowSnapshot> {
+  live(symbol: string, appPrice: () => Promise<number | null>): Promise<LiveOrderflowSnapshot> {
     const now = this.now();
     const hit = this.liveCache.get(symbol);
     if (hit && now - hit.at < LIVE_CACHE_SEC) return hit.snap;
-    const snap = appPrice().then(p => this.snapshot(symbol, p));
+    const snap = appPrice().then(async p => {
+      const base = await this.snapshot(symbol, p);
+      const segs = await this.wallSegments(symbol, base.asOf);
+      const wallSegments = segs.map(sg => ({ ...sg, price: Math.round((sg.sourcePrice - base.basis) * 100) / 100 }));
+      return { ...base, wallSegments };
+    });
     this.liveCache.set(symbol, { at: now, snap });
     snap.catch(() => this.liveCache.delete(symbol));
     return snap;

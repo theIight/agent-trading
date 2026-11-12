@@ -269,6 +269,7 @@ export class AnalysisService {
       connected: Boolean(st?.connected && st.synced),
       notes: snap.notes,
       levels: snap.levels,
+      wallSegments: snap.wallSegments,
     };
   }
 
