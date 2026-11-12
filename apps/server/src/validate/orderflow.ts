@@ -31,7 +31,6 @@ export function validateBinanceOrderflow(of: Orderflow | undefined, ctx: Binance
     cvd: of?.cvd || ctx.cvdText,
     lastPrices: [],
     levels: snap.levels,
-    offset: snap.basis,
     asOf: snap.asOf,
     historyMin: snap.historyMin,
   };

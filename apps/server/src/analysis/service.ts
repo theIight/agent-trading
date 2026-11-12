@@ -265,7 +265,6 @@ export class AnalysisService {
       symbol: sym,
       asOf: snap.asOf,
       historyMin: snap.historyMin,
-      basis: snap.basis,
       connected: Boolean(st?.connected && st.synced),
       notes: snap.notes,
       levels: snap.levels,
@@ -301,7 +300,7 @@ export class AnalysisService {
     return snap;
   }
 
-  /** Lấy order flow Binance tại thời điểm job bắt đầu; basis tính theo giá chart (1m) hiện tại. */
+  /** Lấy order flow Binance tại thời điểm job bắt đầu (giá spot; giá chart 1m chỉ để tham khảo). */
   private async takeOrderflowSnapshot(id: string, symbol: string): Promise<BinanceOrderflowSnapshot> {
     const of = this.opts.binanceOrderflow;
     if (!of) throw new Error('Order flow Binance chưa bật');
@@ -455,7 +454,7 @@ export class AnalysisService {
       if (job.req.hasBinanceOrderflow) {
         const snap = await this.takeOrderflowSnapshot(job.id, job.req.symbol);
         const walls = snap.walls.length;
-        this.emitStep(job.id, `Đã lấy order flow Binance: ${walls} tường, lịch sử sổ lệnh ${Math.round(snap.historyMin)} phút, basis ${snap.basis}`);
+        this.emitStep(job.id, `Đã lấy order flow Binance: ${walls} tường, lịch sử sổ lệnh ${Math.round(snap.historyMin)} phút (giá Binance spot)`);
         for (const n of snap.notes) this.emitStep(job.id, n);
       }
       const outcome = await runner.run(
@@ -526,7 +525,7 @@ export class AnalysisService {
       source: 'binance',
       venue: snap.venue,
       asOf: new Date(snap.asOf * 1000).toISOString(),
-      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart; chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
+      note: 'Gọi get_orderflow. Giá trong đó là giá Binance spot (chưa quy đổi, chart là futures); chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
     };
   }
 

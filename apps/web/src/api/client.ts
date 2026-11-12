@@ -83,7 +83,6 @@ export interface LiveOrderflow {
   symbol: string;
   asOf: number;
   historyMin: number;
-  basis: number;
   connected: boolean;
   notes: string[];
   levels: OrderflowLevel[];

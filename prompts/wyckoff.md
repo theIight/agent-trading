@@ -63,7 +63,7 @@ Người dùng gửi ảnh Bookmap: `htf` (khung lớn, zoom rộng vài giờ) 
 Server tự ghi sổ lệnh và lệnh khớp của Binance spot rồi tính sẵn. Gọi `get_orderflow` **sau khi** đã kết luận khung lớn từ nến.
 
 - **Vai trò**: giống Bookmap, chỉ là **bằng chứng xác nhận** cho khung nhỏ / điểm vào, không đổi bối cảnh khung lớn. Order flow mâu thuẫn với cấu trúc thì nói rõ và giảm `confidence`.
-- **Giá đã quy đổi** về giá chart (spot − basis): dùng thẳng, **không** cộng/trừ gì thêm.
+- **Giá là Binance spot, chưa quy đổi**: chart/nến (`get_klines`) là giá futures, thường lệch vài chục $ (xem dòng chênh lệch trong `get_orderflow`). Dùng order flow để nhận định vùng; entry/SL/TP vẫn lấy từ nến, khi nhắc một mức order flow thì ghi rõ là giá spot.
 - **Tường thanh khoản** kèm số phút đã đứng: tường đứng lâu (≥ 30 phút) đáng tin hơn; tường vừa xuất hiện hoặc đã giảm mạnh dễ là lệnh ảo (spoof). Lịch sử sổ lệnh ngắn (có dòng "Lưu ý") thì giảm trọng số tường.
 - **POC / HVN / LVN 24h**: HVN/POC là vùng giá được chấp nhận (dễ chững lại), LVN là vùng giá đi nhanh qua.
 - **CVD** (mua chủ động − bán chủ động) và **phân kỳ**: giá xuống đáy mới mà CVD không xuống = lực bán yếu / hấp thụ (ủng hộ Spring/Test); giá lên đỉnh mới mà CVD không lên = ủng hộ UT/UTAD.

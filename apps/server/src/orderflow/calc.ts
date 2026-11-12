@@ -284,10 +284,8 @@ export interface BinanceOrderflowSnapshot {
   asOf: number;
   historyMin: number;
   spotPrice: number;
-  /** Giá chart của app (futures) lúc lấy; null = không lấy được (basis = 0). */
+  /** Giá chart của app (futures) lúc lấy, chỉ để tham khảo; null = không lấy được. Các mức giữ nguyên giá spot. */
   appPrice: number | null;
-  /** Spot − giá app; giá chart = giá spot − basis. */
-  basis: number;
   bucket: number;
   unit: string;
   walls: Wall[];
@@ -295,7 +293,7 @@ export interface BinanceOrderflowSnapshot {
   cvd: CvdStats | null;
   bigTrades: BigTrade[];
   absorption: Absorption[];
-  /** Mức đã quy đổi về giá chart, server gắn thẳng vào kết quả. */
+  /** Các mức (giá Binance spot, không quy đổi), server gắn thẳng vào kết quả. */
   levels: OrderflowLevel[];
   notes: string[];
 }
@@ -321,13 +319,12 @@ export const MIN_HISTORY_MIN = 30;
 export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
   const latest = inp.samples.at(-1);
   const spotPrice = latest?.mid ?? inp.candles.at(-1)?.close ?? 0;
-  const basis = inp.appPrice != null && spotPrice ? r2(spotPrice - inp.appPrice) : 0;
-  const toApp = (p: number) => r2(p - basis);
+  // Giữ nguyên giá Binance spot (không quy đổi theo chênh lệch spot/futures).
+  const toApp = (p: number) => r2(p);
   const historyMin = latest ? r2((latest.t - inp.samples[0]!.t) / 60) : 0;
   const notes: string[] = [];
   if (!latest) notes.push('Chưa có dữ liệu sổ lệnh (collector chưa chạy hoặc mất kết nối) — không có tường thanh khoản');
   else if (historyMin < MIN_HISTORY_MIN) notes.push(`Sổ lệnh mới ghi được ${Math.round(historyMin)} phút — thời gian tồn tại của tường chưa đáng tin`);
-  if (inp.appPrice == null) notes.push('Không lấy được giá chart lúc chụp — dùng basis 0');
 
   const walls = findWalls(inp.samples, inp.wallOptions);
   const range = inp.candles.length ? Math.max(...inp.candles.map(c => c.high)) - Math.min(...inp.candles.map(c => c.low)) : 0;
@@ -392,7 +389,6 @@ export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
     historyMin,
     spotPrice,
     appPrice: inp.appPrice,
-    basis,
     bucket: inp.bucket,
     unit: inp.unit,
     walls,

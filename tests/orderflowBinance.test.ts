@@ -139,28 +139,28 @@ describe('buildSnapshot', () => {
   const s = samples(60, () => ({ bids: [[72800, 50]], asks: [[73200, 30]] }));
   const candles = Array.from({ length: 300 }, (_, i) => c(1_000_000 - 18_000 + i * 60, 72950, 73050, 5, 2.5));
 
-  it('quy đổi giá spot về giá chart bằng basis đo được', () => {
+  it('giữ nguyên giá Binance spot (không quy đổi theo giá chart)', () => {
     const snap = buildSnapshot({
       symbol: 'BTCUSDT', venue: 'Binance spot', unit: 'BTC', now: s.at(-1)!.t, bucket: 10, samples: s, candles, trades: [],
       appPrice: 72966, absorptionMinQty: 25,
     });
-    expect(snap.basis).toBe(34);
     const bid = snap.levels.find(l => l.kind === 'BID_WALL')!;
-    expect(bid).toMatchObject({ sourcePrice: 72800, price: 72766, size: 50, sizeSource: 'BOOK', persistMin: 60 });
+    expect(bid).toMatchObject({ sourcePrice: 72800, price: 72800, size: 50, sizeSource: 'BOOK', persistMin: 60 });
+    expect(snap.levels.every(l => l.price === l.sourcePrice)).toBe(true);
     expect(snap.levels.find(l => l.kind === 'POC')?.sizeSource).toBe('VOLUME');
     expect(snap.notes).toEqual([]);
     const text = formatOrderflowForAgent(snap);
-    expect(text).toContain('basis = 34');
-    expect(text).toContain('Tường mua 72766');
+    expect(text).toContain('giá Binance SPOT (chưa quy đổi)');
+    expect(text).toContain('chênh khoảng 34');
+    expect(text).toContain('Tường mua 72800');
   });
 
-  it('chưa có sổ lệnh / không có giá chart → ghi chú, basis 0', () => {
+  it('chưa có sổ lệnh → ghi chú, không có tường', () => {
     const snap = buildSnapshot({
       symbol: 'BTCUSDT', venue: 'Binance spot', unit: 'BTC', now: 2_000_000, bucket: 10, samples: [], candles, trades: [], appPrice: null, absorptionMinQty: 25,
     });
-    expect(snap.basis).toBe(0);
     expect(snap.walls).toEqual([]);
-    expect(snap.notes.join(' ')).toMatch(/Chưa có dữ liệu sổ lệnh.*basis 0/);
+    expect(snap.notes.join(' ')).toMatch(/Chưa có dữ liệu sổ lệnh/);
   });
 });
 
@@ -284,7 +284,8 @@ describe('validateBinanceOrderflow', () => {
       levels: [{ kind: 'ASK_WALL', bookmapPrice: 1, strength: 0.5, note: '' }],
     };
     const r = validateBinanceOrderflow(agent, ctx);
-    expect(r.orderflow).toMatchObject({ source: 'binance', summary: 'Tường mua dày bên dưới.', cvd: 'CVD 24h +10 BTC', lastPrices: [], offset: 10 });
+    expect(r.orderflow).toMatchObject({ source: 'binance', summary: 'Tường mua dày bên dưới.', cvd: 'CVD 24h +10 BTC', lastPrices: [] });
+    expect(r.orderflow.offset).toBeUndefined();
     expect(r.orderflow.levels).toEqual(snapshot.levels);
     expect(r.warnings).toHaveLength(2);
   });
@@ -401,7 +402,7 @@ describe('AnalysisService + order flow Binance', () => {
       expect(info.orderflow).toMatchObject({ source: 'binance', venue: 'Binance spot' });
       expect(info.bookmap).toBeNull();
       const snap = svc.orderflowSnapshot(req.analysisId);
-      expect(snap.basis).toBe(3); // spot 103 − giá chart 100
+      expect(snap.appPrice).toBe(100);
       const res = await svc.submit(req.analysisId, submission({ orderflow: { summary: 'Tường mua 77 giữ giá.', cvd: 'CVD tăng' } }));
       expect(res.ok).toBe(true);
       return { ok: true, durationMs: 1 };
@@ -412,8 +413,8 @@ describe('AnalysisService + order flow Binance', () => {
     const done = repo.get(rec.id)!;
     expect(done.orderflowSource).toBe('binance');
     expect(repo.list().find(r => r.id === rec.id)?.orderflowSource).toBe('binance');
-    expect(done.result?.orderflow).toMatchObject({ source: 'binance', summary: 'Tường mua 77 giữ giá.', cvd: 'CVD tăng', offset: 3 });
-    expect(done.result?.orderflow?.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 77, size: 50 });
+    expect(done.result?.orderflow).toMatchObject({ source: 'binance', summary: 'Tường mua 77 giữ giá.', cvd: 'CVD tăng' });
+    expect(done.result?.orderflow?.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 80, size: 50 });
     expect(runner.lastReq?.hasBookmap).toBe(false);
   });
 });
@@ -484,9 +485,9 @@ describe('order flow live cho chart', () => {
   it('service.orderflowLive trả levels + lịch sử tường đã quy đổi; symbol không bật → 404', async () => {
     const { service } = setup(async () => ({ ok: true }));
     const live = await service.orderflowLive('btcusdt');
-    expect(live).toMatchObject({ source: 'binance', symbol: 'BTCUSDT', basis: 3, connected: true });
-    expect(live.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 77 });
-    expect(live.wallSegments).toEqual([expect.objectContaining({ side: 'BID', sourcePrice: 80, price: 77, status: 'active', end: null, peakSize: 50 })]);
+    expect(live).toMatchObject({ source: 'binance', symbol: 'BTCUSDT', connected: true });
+    expect(live.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 80 });
+    expect(live.wallSegments).toEqual([expect.objectContaining({ side: 'BID', sourcePrice: 80, price: 80, status: 'active', end: null, peakSize: 50 })]);
     await expect(service.orderflowLive('ETHUSDT')).rejects.toThrow(/Chưa bật/);
   });
 });

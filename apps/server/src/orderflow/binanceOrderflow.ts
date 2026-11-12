@@ -50,7 +50,7 @@ export const LIVE_CACHE_SEC = 10;
 export const WALL_HISTORY_H = 24;
 
 export interface LiveOrderflowSnapshot extends BinanceOrderflowSnapshot {
-  /** Lịch sử tường 24h (giá đã quy đổi theo basis hiện tại). */
+  /** Lịch sử tường 24h (giá Binance spot). */
   wallSegments: WallSegment[];
 }
 
@@ -144,7 +144,7 @@ export class BinanceOrderflow {
     const snap = appPrice().then(async p => {
       const base = await this.snapshot(symbol, p);
       const segs = await this.wallSegments(symbol, base.asOf);
-      const wallSegments = segs.map(sg => ({ ...sg, price: Math.round((sg.sourcePrice - base.basis) * 100) / 100 }));
+      const wallSegments = segs.map(sg => ({ ...sg, price: sg.sourcePrice }));
       return { ...base, wallSegments };
     });
     this.liveCache.set(symbol, { at: now, snap });
@@ -152,7 +152,7 @@ export class BinanceOrderflow {
     return snap;
   }
 
-  /** Bản tóm tắt order flow tại `now`; `appPrice` = giá chart lúc đó (để tính basis spot → chart). */
+  /** Bản tóm tắt order flow tại `now`; `appPrice` = giá chart lúc đó (chỉ để tham khảo, không quy đổi). */
   async snapshot(symbol: string, appPrice: number | null): Promise<BinanceOrderflowSnapshot> {
     const src = this.opts.collectors[symbol];
     if (!src) throw new Error(`Chưa bật order flow Binance cho ${symbol}`);
