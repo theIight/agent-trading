@@ -5,8 +5,6 @@ import {
   HistogramSeries,
   TickMarkType,
   createChart,
-  createSeriesMarkers,
-  type ISeriesMarkersPluginApi,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
@@ -21,6 +19,7 @@ import { fetchInstrument, fetchKlines } from '../api/client.ts';
 import { subscribeLiveKlines, subscribeServerLive } from './liveFeed.ts';
 import { countdownLabel, updateSkew } from './countdown.ts';
 import { CountdownPrimitive } from './CountdownPrimitive.ts';
+import { SpikeLabelPrimitive } from './SpikeLabelPrimitive.ts';
 import { THEMES, type ThemeName } from './theme.ts';
 
 const INITIAL_BARS = 800;
@@ -80,7 +79,7 @@ export class ChartController {
   readonly volumeSeries: ISeriesApi<'Histogram'>;
   /** Volume gộp: cột perp + spot (vẽ sau cột perp), chỉ nến đã đóng. */
   private readonly spotVolumeSeries: ISeriesApi<'Histogram'>;
-  private readonly spikeMarkers: ISeriesMarkersPluginApi<Time>;
+  private readonly spikeLabels = new SpikeLabelPrimitive();
   private volAgg: Map<number, VolumeAggBar> | null = null;
   private volSpikes: VolumeSpike[] = [];
   private candles: Candle[] = [];
@@ -111,7 +110,7 @@ export class ChartController {
       priceLineVisible: false,
       color: SPOT_VOLUME_COLOR,
     });
-    this.spikeMarkers = createSeriesMarkers(this.spotVolumeSeries, []);
+    this.spotVolumeSeries.attachPrimitive(this.spikeLabels);
     this.volumeSeries = this.chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -186,7 +185,7 @@ export class ChartController {
     const agg = this.volAgg;
     if (!agg) {
       this.spotVolumeSeries.setData([]);
-      this.spikeMarkers.setMarkers([]);
+      this.spikeLabels.setLabels([]);
       return;
     }
     const spotData: HistogramData[] = [];
@@ -195,18 +194,11 @@ export class ChartController {
       if (a && a.spot !== null) spotData.push({ time: c.time as UTCTimestamp, value: a.perp + a.spot });
     }
     this.spotVolumeSeries.setData(spotData);
-    const have = new Set(spotData.map(d => d.time as number));
-    this.spikeMarkers.setMarkers(
+    const top = new Map(spotData.map(d => [d.time as number, d.value]));
+    this.spikeLabels.setLabels(
       this.volSpikes
-        .filter(sp => have.has(sp.time))
-        .map(sp => ({
-          time: sp.time as UTCTimestamp,
-          position: 'aboveBar' as const,
-          shape: 'circle' as const,
-          size: sp.kind === 'BOTH' ? 1 : 0.6,
-          color: SPIKE_COLORS[sp.kind],
-          text: SPIKE_TEXT[sp.kind],
-        })),
+        .filter(sp => top.has(sp.time))
+        .map(sp => ({ time: sp.time, value: top.get(sp.time)!, text: SPIKE_TEXT[sp.kind], color: SPIKE_COLORS[sp.kind] })),
     );
   }
 
