@@ -3,7 +3,7 @@
 ## 1. Dữ liệu thị trường
 
 * Nguồn theo symbol (`market/router.ts`):
-  * **Binance USDⓈ-M Futures** (mặc định, crypto): REST `/fapi/v1/klines` (server), WebSocket `wss://fstream.binance.com/ws/<symbol>@kline_<tf>` (trình duyệt kết nối trực tiếp, tự reconnect backoff 1s→30s).
+  * **Binance USDⓈ-M Futures** (mặc định, crypto): REST `/fapi/v1/klines` (server), WebSocket `wss://fstream.binance.com/market/ws/<symbol>@kline_<tf>` (trình duyệt kết nối trực tiếp, tự reconnect backoff 1s→30s; đường `/ws/` cũ không còn gửi dữ liệu). Chỉ báo "Live" khi đã nhận message; mở mà 60s không có message → đóng và kết nối lại.
   * **Tiingo + OKX** cho `XAUUSD` khi `XAUUSD_SOURCE=tiingo-okx` (mặc định; `oanda` / `binance` = XAUUSDT là phương án thay thế):
     * Giá: Tiingo FX `GET /tiingo/fx/<TIINGO_XAU_TICKER>/prices?startDate&endDate&resampleFreq` (1min…1day; 1W gộp từ 1D, tuần vàng mở tối Chủ nhật, nhãn = thứ 2 00:00 UTC), header `Authorization: Token`. Không có volume.
     * Quota gói miễn phí: đếm request (cửa sổ trượt) `TIINGO_MAX_PER_HOUR` (45) / `TIINGO_MAX_PER_DAY` (950); chạm giới hạn → lỗi → KlineService trả cache.
