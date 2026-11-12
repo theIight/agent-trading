@@ -192,3 +192,4 @@ API nội bộ `/internal/*`: chỉ localhost + header `x-wca-token` = nội dun
 * Kết quả có mục "Order flow (Bookmap)" hoặc "Order flow (Binance)" (chú thích màu, summary, CVD, các mức — HVN/LVN hiển thị "Vùng volume cao/thấp" —; Bookmap: giá Bookmap + ảnh, offset dùng / đo được; Binance: số phút đứng, giờ lấy, basis, phút lịch sử); lịch sử hiện nhãn `BM` (ảnh) hoặc `OF` (Binance).
 * Mặc định ẩn mục của khung **nhỏ hơn** khung đang xem; mục của khung lớn hơn được snap về nến chứa nó.
 * `rightOffset` của time scale tự mở rộng để thấy hết phần tương lai.
+* **Đếm ngược đóng nến**: nhãn trên trục giá ngay dưới nhãn giá hiện tại (cùng màu nến tăng/giảm), cập nhật mỗi giây: `mm:ss` (< 1 giờ), `hh:mm:ss` (< 1 ngày), `Xd hh:mm`. Mốc đóng = `time` nến cuối + độ dài khung. Quá giờ đóng > 5 giây mà chưa có nến mới (vàng đóng cửa, mất kết nối) → ẩn. Crypto hiệu chỉnh theo giờ sàn (`E` của WebSocket, làm mượt, bỏ qua lệch < 1 giây).

@@ -7,6 +7,8 @@ export const LIVE_STALE_MS = 60_000;
 
 interface BinanceKlineMsg {
   e: 'kline';
+  /** Giờ sự kiện của sàn (ms). */
+  E: number;
   k: { t: number; o: string; h: string; l: string; c: string; v: string; x: boolean };
 }
 
@@ -17,7 +19,7 @@ interface BinanceKlineMsg {
 export function subscribeLiveKlines(
   symbol: string,
   tf: Timeframe,
-  onCandle: (candle: Candle, closed: boolean) => void,
+  onCandle: (candle: Candle, closed: boolean, eventMs?: number) => void,
   onStatus?: (status: 'connecting' | 'open' | 'closed') => void,
 ): () => void {
   let ws: WebSocket | null = null;
@@ -53,6 +55,7 @@ export function subscribeLiveKlines(
       onCandle(
         { time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v },
         k.x,
+        msg.E,
       );
     };
     sock.onclose = () => {

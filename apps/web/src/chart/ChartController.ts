@@ -17,6 +17,8 @@ import type { Candle, Timeframe } from '@wca/shared';
 import type { InstrumentInfo } from '@wca/shared';
 import { fetchInstrument, fetchKlines } from '../api/client.ts';
 import { subscribeLiveKlines, subscribeServerLive } from './liveFeed.ts';
+import { countdownLabel, updateSkew } from './countdown.ts';
+import { CountdownPrimitive } from './CountdownPrimitive.ts';
 import { THEMES, type ThemeName } from './theme.ts';
 
 const INITIAL_BARS = 800;
@@ -75,6 +77,8 @@ export class ChartController {
   private loadingMore = false;
   private noMoreHistory = false;
   private loadToken = 0;
+  /** Giờ sàn − giờ máy (ms), từ giờ sự kiện của WebSocket Binance. */
+  private clockSkewMs = 0;
 
   constructor(container: HTMLElement, private readonly listeners: ChartListeners = {}) {
     this.chart = createChart(container, {
@@ -92,6 +96,19 @@ export class ChartController {
       priceLineVisible: false,
     });
     this.chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    // Đếm ngược đóng nến dưới nhãn giá hiện tại.
+    this.candleSeries.attachPrimitive(
+      new CountdownPrimitive({
+        get: () => {
+          const last = this.candles.at(-1);
+          if (!last) return null;
+          const text = countdownLabel(last.time, this.tf, (Date.now() + this.clockSkewMs) / 1000);
+          if (text === null) return null;
+          const t = THEMES[this.theme];
+          return { text, price: last.close, color: last.close >= last.open ? t.up : t.down };
+        },
+      }),
+    );
     this.applyTheme('dark');
 
     this.chart.subscribeCrosshairMove(this.handleCrosshair);
@@ -165,7 +182,15 @@ export class ChartController {
       this.unsubscribeLive =
         info?.live === 'server-sse'
           ? subscribeServerLive(symbol, tf, c => this.onLiveCandle(c), onStatus, msg => this.listeners.onError?.(msg))
-          : subscribeLiveKlines(symbol, tf, c => this.onLiveCandle(c), onStatus);
+          : subscribeLiveKlines(
+              symbol,
+              tf,
+              (c, _closed, eventMs) => {
+                if (eventMs) this.clockSkewMs = updateSkew(this.clockSkewMs, eventMs, Date.now());
+                this.onLiveCandle(c);
+              },
+              onStatus,
+            );
     } catch (err) {
       if (token !== this.loadToken) return;
       // Không để lại nến của symbol cũ khi symbol mới tải lỗi (dễ hiểu nhầm).
