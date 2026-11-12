@@ -78,6 +78,7 @@ export class OverlayManager {
       events: v?.data.events ?? [],
       showHeatmap: Boolean(v?.showHeatmap),
       showBubbles: Boolean(v?.showBubbles),
+      minQty: v?.data.minQty,
       mapTime: makeTimeMapper(this.ctrl.getCandles(), this.ctrl.getTimeframe()),
     });
   }

@@ -1,5 +1,6 @@
 import type { IPrimitivePaneRenderer, IPrimitivePaneView, ISeriesPrimitive, SeriesAttachedParameter, Time } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
+import { display, font } from './displaySettings.ts';
 
 // Dấu đột biến volume (S / P / S+P) trên đỉnh cột volume gộp: chữ nhỏ (series markers không cho chỉnh cỡ chữ).
 
@@ -11,8 +12,6 @@ export interface SpikeLabel {
   color: string;
 }
 
-/** Cỡ chữ nhãn đột biến (px). */
-export const SPIKE_FONT_PX = 9;
 const DOT_R = 2;
 
 class Renderer implements IPrimitivePaneRenderer {
@@ -23,7 +22,7 @@ class Renderer implements IPrimitivePaneRenderer {
     if (!p || !labels.length) return;
     const ts = p.chart.timeScale();
     target.useMediaCoordinateSpace(({ context: c }) => {
-      c.font = `${SPIKE_FONT_PX}px -apple-system, BlinkMacSystemFont, Roboto, sans-serif`;
+      c.font = font(display().spikeFontPx);
       c.textAlign = 'center';
       c.textBaseline = 'bottom';
       for (const l of labels) {

@@ -1,5 +1,4 @@
-import { PERP_VENUES, VOLUME_VENUES, type Timeframe, type VolumeAggBar, type VolumeSpike, type VolumeVenue } from '@wca/shared';
-import { tfSeconds } from '@wca/shared';
+import { PERP_VENUES, VOLUME_VENUES, spikeRatios, tfSeconds, type Timeframe, type VolumeAggBar, type VolumeSpike, type VolumeVenue } from '@wca/shared';
 
 // Logic thuần cho volume gộp: mốc nến, gộp theo sàn, tìm đột biến (test trong tests/volumeAgg.test.ts).
 
@@ -48,39 +47,20 @@ export interface SpikeOptions {
   minBars?: number;
 }
 
-function median(xs: number[]): number {
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
-}
-
 /**
  * Đột biến theo nhóm: volume > x × trung vị `window` nến trước (chỉ nến hợp lệ của nhóm: perp đủ 3 sàn, spot có dữ liệu).
  * Nến thiếu dữ liệu của nhóm → nhóm đó không tính (không báo sai).
  */
 export function findSpikes(bars: readonly VolumeAggBar[], o: SpikeOptions): VolumeSpike[] {
-  const window = o.window ?? 20;
-  const minBars = o.minBars ?? 15;
-  const ratio = (i: number, val: (b: VolumeAggBar) => number | null): number | null => {
-    const v = val(bars[i]!);
-    if (v === null) return null;
-    const prev: number[] = [];
-    for (let k = i - 1; k >= 0 && k >= i - window; k--) {
-      const p = val(bars[k]!);
-      if (p !== null && p > 0) prev.push(p);
-    }
-    if (prev.length < minBars) return null;
-    const m = median(prev);
-    return m > 0 ? Math.round((v / m) * 10) / 10 : null;
-  };
+  const perp = spikeRatios(bars.map(b => (b.perpComplete ? b.perp : null)), o.window, o.minBars);
+  const spot = spikeRatios(bars.map(b => b.spot), o.window, o.minBars);
   const out: VolumeSpike[] = [];
-  for (let i = 0; i < bars.length; i++) {
-    const perpX = ratio(i, b => (b.perpComplete ? b.perp : null));
-    const spotX = ratio(i, b => b.spot);
+  bars.forEach((b, i) => {
+    const perpX = perp[i]!;
+    const spotX = spot[i]!;
     const p = perpX !== null && perpX > o.x;
     const s = spotX !== null && spotX > o.x;
-    if (!p && !s) continue;
-    out.push({ time: bars[i]!.time, kind: p && s ? 'BOTH' : s ? 'SPOT' : 'PERP', perpX, spotX });
-  }
+    if (p || s) out.push({ time: b.time, kind: p && s ? 'BOTH' : s ? 'SPOT' : 'PERP', perpX, spotX });
+  });
   return out;
 }

@@ -174,7 +174,8 @@ export class LiquidationService {
     if (!col) throw new Error(`Chưa bật thanh lý cho ${symbol}`);
     const now = this.now();
     const from = now - Math.min(this.opts.retainH * 3600, BUBBLE_MAX_BARS * tfSec);
-    const events = bucketLiquidations(col.rows(from, now), tfSec, bubbleMinQty(this.opts.minQty[symbol] ?? 0, tfSec));
+    const minQty = bubbleMinQty(this.opts.minQty[symbol] ?? 0, tfSec);
+    const events = bucketLiquidations(col.rows(from, now), tfSec, minQty);
     const notes: string[] = [];
     let heatmap: LiquidationHeatmap | null = null;
     try {
@@ -185,8 +186,9 @@ export class LiquidationService {
     }
     const venues = col.status();
     for (const v of venues) if (!v.connected) notes.push(`Mất kết nối thanh lý ${v.venue === 'okx' ? 'OKX' : 'Binance'} — đang thử lại`);
-    if (heatmap && heatmapAsOf === heatmap.asOf) return { symbol, events, heatmap: null, heatmapUnchanged: true, venues, notes };
-    return { symbol, events, heatmap, venues, notes };
+    const base = { symbol, events, minQty: Math.round(minQty * 1000) / 1000, venues, notes };
+    if (heatmap && heatmapAsOf === heatmap.asOf) return { ...base, heatmap: null, heatmapUnchanged: true };
+    return { ...base, heatmap };
   }
 
   /** Tóm tắt cho agent (get_orderflow): thanh lý 24h + vùng heatmap dày nhất quanh `price`. */

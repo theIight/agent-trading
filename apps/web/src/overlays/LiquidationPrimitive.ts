@@ -13,6 +13,7 @@ import type {
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import type { LiquidationEvent, LiquidationHeatmap } from '@wca/shared';
 import { bubbleColor, bubbleRadius, heatColor } from './liquidationModel.ts';
+import { display } from '../chart/displaySettings.ts';
 
 // Lớp thanh lý: heatmap mức thanh lý ước tính (sau nến) + bong bóng thanh lý thật (trên nến).
 
@@ -23,6 +24,8 @@ interface LiqData {
   events: LiquidationEvent[];
   showHeatmap: boolean;
   showBubbles: boolean;
+  /** Ngưỡng cụm server đã áp (đồng gốc). */
+  minQty?: number;
   mapTime: TimeMapper;
 }
 
@@ -30,8 +33,17 @@ interface Ctx {
   chart: IChartApi;
   series: ISeriesApi<SeriesType>;
   data: LiqData;
-  /** Màu theo cường độ 0–255 (tính sẵn). */
-  palette: string[];
+}
+
+/** Bảng màu 0–255 theo hệ số độ đậm (cache theo hệ số). */
+const palettes = new Map<number, string[]>();
+function palette(opacity: number): string[] {
+  let p = palettes.get(opacity);
+  if (!p) {
+    p = Array.from({ length: 256 }, (_, i) => heatColor(i, opacity));
+    palettes.set(opacity, p);
+  }
+  return p;
 }
 
 function xOf(ctx: Ctx, time: number): number | null {
@@ -49,7 +61,8 @@ class HeatmapRenderer implements IPrimitivePaneRenderer {
   constructor(private readonly ctx: Ctx) {}
   draw(): void {}
   drawBackground(target: CanvasRenderingTarget2D): void {
-    const { data, series, palette } = this.ctx;
+    const { data, series } = this.ctx;
+    const colors = palette(display().heatmapOpacity);
     const h = data.heatmap;
     if (!data.showHeatmap || !h || !h.cols.length) return;
     target.useMediaCoordinateSpace(({ context: c, mediaSize }) => {
@@ -74,7 +87,7 @@ class HeatmapRenderer implements IPrimitivePaneRenderer {
           const yLow = yAt(ix);
           const yHigh = yAt(ix + 1);
           if (yLow === null || yHigh === null || yLow < 0 || yHigh > mediaSize.height) continue;
-          c.fillStyle = palette[flat[i + 1]!]!;
+          c.fillStyle = colors[flat[i + 1]!]!;
           c.fillRect(x1, yHigh, w, Math.max(1, yLow - yHigh));
         }
       }
@@ -86,10 +99,13 @@ class BubbleRenderer implements IPrimitivePaneRenderer {
   constructor(private readonly ctx: Ctx) {}
   draw(target: CanvasRenderingTarget2D): void {
     const { data, series } = this.ctx;
-    if (!data.showBubbles || !data.events.length) return;
-    const maxQty = Math.max(...data.events.map(e => e.qty));
+    // Cài đặt: chỉ hiện cụm ≥ hệ số × ngưỡng server.
+    const min = (data.minQty ?? 0) * display().bubbleMinX;
+    const events = data.events.filter(e => e.qty >= min);
+    if (!data.showBubbles || !events.length) return;
+    const maxQty = Math.max(...events.map(e => e.qty));
     target.useMediaCoordinateSpace(({ context: c }) => {
-      for (const e of data.events) {
+      for (const e of events) {
         const x = xOf(this.ctx, e.t);
         const y = series.priceToCoordinate(e.price);
         if (x === null || y === null) continue;
@@ -119,7 +135,6 @@ class View implements IPrimitivePaneView {
   }
 }
 
-const PALETTE = Array.from({ length: 256 }, (_, i) => heatColor(i));
 
 export class LiquidationPrimitive implements ISeriesPrimitive<Time> {
   private ctx: Ctx | null = null;
@@ -129,7 +144,7 @@ export class LiquidationPrimitive implements ISeriesPrimitive<Time> {
 
   attached(param: SeriesAttachedParameter<Time>): void {
     this.requestUpdate = param.requestUpdate;
-    this.ctx = { chart: param.chart, series: param.series, data: this.data, palette: PALETTE };
+    this.ctx = { chart: param.chart, series: param.series, data: this.data };
     this.views = [new View(new HeatmapRenderer(this.ctx), 'bottom'), new View(new BubbleRenderer(this.ctx), 'top')];
   }
 

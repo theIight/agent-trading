@@ -13,6 +13,7 @@ import type {
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import { EMPTY_MODEL, layoutLabels, type LabelBox, type OverlayModel } from './model.ts';
+import { display, font } from '../chart/displaySettings.ts';
 
 type TimeMapper = (time: number) => number | null;
 
@@ -40,13 +41,14 @@ function yOf(ctx: Ctx, price: number): number | null {
   return ctx.series.priceToCoordinate(price);
 }
 
-const FONT = '11px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
-const OF_FONT = '10px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
-/** Khoảng cách dọc tối thiểu giữa 2 nhãn order flow (px). */
-const OF_LABEL_GAP = 11;
+/** Font theo cài đặt hiển thị (đọc mỗi lần vẽ). */
+const overlayFont = () => font(display().overlayFontPx);
+const ofFont = () => font(display().ofFontPx);
+/** Khoảng cách dọc tối thiểu giữa 2 nhãn order flow (px) = cỡ chữ + 1. */
+const ofLabelGap = () => display().ofFontPx + 1;
 
 function drawLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') {
-  c.font = FONT;
+  c.font = overlayFont();
   c.textAlign = align;
   c.textBaseline = 'middle';
   c.fillStyle = color;
@@ -75,7 +77,7 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
         if (x2 - x1 > 40) drawLabel(c, b.label, (x1 + x2) / 2, mediaSize.height * 0.8 - 8, this.ctx.textColor, 'center');
       }
       // Order flow: dải mờ sau nến (dày theo khối lượng), nhãn số nhỏ sát mép phải, không có nhãn trên trục giá.
-      c.font = OF_FONT;
+      c.font = ofFont();
       c.textAlign = 'right';
       c.textBaseline = 'middle';
       const ofLabels: { y: number; text: string; color: string }[] = [];
@@ -132,7 +134,7 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
       for (let i = 1; i < endLabels.length; i++) {
         const prev = endLabels[i - 1]!;
         const cur = endLabels[i]!;
-        if (Math.abs(cur.x - prev.x) < 40) cur.y = Math.max(cur.y, prev.y + OF_LABEL_GAP);
+        if (Math.abs(cur.x - prev.x) < 40) cur.y = Math.max(cur.y, prev.y + ofLabelGap());
       }
       for (const l of endLabels) {
         c.fillStyle = l.color;
@@ -141,7 +143,7 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
       c.textAlign = 'right';
       // Vạch sát nhau → giãn nhãn dọc để không đè (nhãn dưới cùng giữ giữa vạch).
       ofLabels.sort((p, q) => q.y - p.y);
-      for (let i = 1; i < ofLabels.length; i++) ofLabels[i]!.y = Math.min(ofLabels[i]!.y, ofLabels[i - 1]!.y - OF_LABEL_GAP);
+      for (let i = 1; i < ofLabels.length; i++) ofLabels[i]!.y = Math.min(ofLabels[i]!.y, ofLabels[i - 1]!.y - ofLabelGap());
       for (const l of ofLabels) {
         c.fillStyle = l.color;
         c.fillText(l.text, mediaSize.width - 4, l.y);
@@ -155,7 +157,7 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
   draw(target: CanvasRenderingTarget2D): void {
     target.useMediaCoordinateSpace(({ context: c, mediaSize }) => {
       // Nhãn vẽ sau cùng, đã giãn để không đè nhau.
-      c.font = FONT;
+      c.font = overlayFont();
       const labels: (LabelBox & { text: string; color: string })[] = [];
       const addLabel = (text: string, x: number, y: number, color: string, align: 'left' | 'right') => {
         const width = c.measureText(text).width;
@@ -208,7 +210,7 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
           }
         }
         if (line.label) {
-          c.font = FONT;
+          c.font = overlayFont();
           const w = c.measureText(line.label).width;
           // Gần mép phải → đặt nhãn phía trên, căn phải tại điểm cuối để không bị cắt.
           if (end.x + 6 + w > mediaSize.width) addLabel(line.label, Math.min(end.x, mediaSize.width) - 4, end.y - 9, line.color, 'right');
@@ -216,7 +218,7 @@ class ForegroundRenderer implements IPrimitivePaneRenderer {
         }
       }
 
-      const ys = layoutLabels(labels);
+      const ys = layoutLabels(labels, 4, display().overlayFontPx + 1);
       labels.forEach((l, i) => drawLabel(c, l.text, l.x, ys[i]!, l.color, l.align));
     });
   }

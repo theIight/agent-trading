@@ -41,6 +41,8 @@ export interface LiveLiquidations {
   symbol: string;
   /** Cụm thanh lý theo nến khung đang xem (đã lọc ngưỡng). */
   events: LiquidationEvent[];
+  /** Ngưỡng cụm đã áp cho khung này (đồng gốc). */
+  minQty?: number;
   heatmap: LiquidationHeatmap | null;
   /** true = heatmap không đổi so với `heatmapAsOf` client gửi lên (không gửi lại, giữ bản cũ). */
   heatmapUnchanged?: boolean;

@@ -390,3 +390,27 @@ button, input { font: inherit; color: inherit; }
 .liq-summary { margin-top: 6px; }
 .liq-summary summary { cursor: pointer; }
 .liq-summary pre { white-space: pre-wrap; font: inherit; margin: 4px 0 0; }
+
+/* ---------- Nguồn volume + cài đặt hiển thị ---------- */
+.vol-source { display: inline-flex; align-items: center; gap: 4px; }
+.vol-source select {
+  font: inherit; font-size: 12px; color: var(--text); background: var(--panel, transparent);
+  border: 1px solid var(--border); border-radius: 4px; padding: 1px 4px;
+}
+.settings { position: relative; }
+.settings .icon-btn { font-size: 16px; line-height: 1; }
+.settings-panel {
+  /* fixed: thanh công cụ có overflow-x: auto sẽ cắt bảng nếu dùng absolute. */
+  position: fixed; right: 12px; top: 48px; z-index: 50; width: 340px;
+  background: var(--panel, var(--bg)); color: var(--text); border: 1px solid var(--border);
+  border-radius: 8px; padding: 10px 12px; box-shadow: 0 8px 24px rgba(0,0,0,0.35); font-size: 12px;
+}
+.settings-title { font-weight: 600; margin-bottom: 8px; }
+.settings-row { display: flex; flex-direction: column; gap: 2px; margin-bottom: 8px; }
+.settings-row.check { flex-direction: row; justify-content: space-between; align-items: center; }
+.settings-ctrl { display: flex; align-items: center; gap: 8px; }
+.settings-ctrl input[type='range'] { flex: 1; }
+.settings-ctrl b { min-width: 72px; text-align: right; font-weight: 600; }
+.settings-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
+.settings-foot .muted { font-size: 11px; }
+.settings-foot button { white-space: nowrap; }

@@ -1,3 +1,4 @@
+import { isVolumeSource, VOLUME_SOURCE_LABELS, VOLUME_SOURCES } from '@wca/shared';
 import { LAYER_KEYS, LAYER_LABELS } from '../overlays/model.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useLiquidationStore } from '../store/useLiquidationStore.ts';
@@ -11,7 +12,7 @@ export function LayerToggles() {
   const { data: liq, showBubbles, showHeatmap, toggleBubbles, toggleHeatmap } = useLiquidationStore();
   const symbol = useAppStore(s => s.symbol);
   const volAggSupported = useAnalysisStore(s => s.volumeAggSymbols.includes(symbol));
-  const { enabled: volAggOn, toggle: toggleVolAgg } = useVolumeAggStore();
+  const { source: volSource, setSource: setVolSource } = useVolumeAggStore();
   if (!current && !live && !liq && !volAggSupported) return null;
   // Chưa có phân tích: chỉ có toggle Order flow (live) và thanh lý.
   const keys = current ? LAYER_KEYS.filter(k => k !== 'orderflow' || current.orderflow || live) : live ? (['orderflow'] as const) : [];
@@ -24,9 +25,18 @@ export function LayerToggles() {
         </label>
       ))}
       {volAggSupported && (
-        <label title="Nến đã đóng: cột volume = perp Binance Futures + OKX + Bybit, phần cam phía trên = Binance spot. Dấu S/P/S+P = đột biến spot / perp / cả hai (> 3× trung vị 20 nến)">
-          <input type="checkbox" checked={volAggOn} onChange={toggleVolAgg} />
-          Volume gộp
+        <label
+          className="vol-source"
+          title="Nguồn cột volume (nến đã đóng). Gộp perp + spot: cột perp 3 sàn + phần cam = Binance spot, dấu S/P/S+P. Nguồn đơn lẻ / tổng: cột volume của nguồn đó, dấu đột biến theo chính nguồn (ngưỡng trong ⚙)"
+        >
+          Volume
+          <select value={volSource} onChange={e => isVolumeSource(e.target.value) && setVolSource(e.target.value)}>
+            {VOLUME_SOURCES.map(s => (
+              <option key={s} value={s}>
+                {VOLUME_SOURCE_LABELS[s]}
+              </option>
+            ))}
+          </select>
         </label>
       )}
       {liq && (

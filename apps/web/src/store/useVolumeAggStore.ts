@@ -1,46 +1,49 @@
 import { create } from 'zustand';
-import type { Timeframe, VolumeAggResponse } from '@wca/shared';
+import { isVolumeSource, type Timeframe, type VolumeAggResponse, type VolumeSource } from '@wca/shared';
 import { fetchVolumeAgg } from '../api/client.ts';
 
-// Volume gộp nhiều sàn (nến đã đóng) cho symbol/khung đang xem. Chỉ tải khi bật toggle; tải lại khi có nến mới đóng.
+// Nguồn volume trên chart + dữ liệu volume nhiều sàn (nến đã đóng). Chỉ tải khi nguồn ≠ Binance Futures; tải lại khi có nến mới.
 
-const ENABLED_KEY = 'wca:layerVolAgg';
+const SOURCE_KEY = 'wca:volumeSource';
+/** Khoá cũ của toggle "Volume gộp" (1 = bật) → nguồn `stacked`. */
+const LEGACY_KEY = 'wca:layerVolAgg';
 
-function loadEnabled(): boolean {
+function loadSource(): VolumeSource {
   try {
-    return localStorage.getItem(ENABLED_KEY) === '1';
+    const v = localStorage.getItem(SOURCE_KEY);
+    if (isVolumeSource(v)) return v;
+    return localStorage.getItem(LEGACY_KEY) === '1' ? 'stacked' : 'futures';
   } catch {
-    return false;
+    return 'futures';
   }
 }
 
 interface VolumeAggState {
-  enabled: boolean;
+  source: VolumeSource;
   /** `${symbol}:${tf}:${limit}:${mốc nến cuối}` của lần tải gần nhất. */
   key: string | null;
   data: VolumeAggResponse | null;
   error: string | null;
-  toggle: () => void;
-  /** symbol null = không hỗ trợ / tắt. `lastTime` đổi (nến mới) → tải lại. */
+  setSource: (source: VolumeSource) => void;
+  /** symbol null = không hỗ trợ. `lastTime` đổi (nến mới) → tải lại. */
   sync: (symbol: string | null, tf: Timeframe, limit: number, lastTime: number | null) => void;
 }
 
 export const useVolumeAggStore = create<VolumeAggState>((set, get) => ({
-  enabled: loadEnabled(),
+  source: loadSource(),
   key: null,
   data: null,
   error: null,
-  toggle: () => {
-    const enabled = !get().enabled;
-    set({ enabled, ...(enabled ? {} : { data: null, key: null, error: null }) });
+  setSource: source => {
+    set({ source, ...(source === 'futures' ? { data: null, key: null, error: null } : {}) });
     try {
-      localStorage.setItem(ENABLED_KEY, enabled ? '1' : '0');
+      localStorage.setItem(SOURCE_KEY, source);
     } catch {
       // Không lưu được: chỉ mất trạng thái nhớ.
     }
   },
   sync: (symbol, tf, limit, lastTime) => {
-    if (!symbol || !get().enabled || !limit || lastTime === null) {
+    if (!symbol || get().source === 'futures' || !limit || lastTime === null) {
       if (get().key !== null) set({ key: null, data: null, error: null });
       return;
     }

@@ -16,8 +16,8 @@ export function bubbleColor(side: LiquidationEvent['side'], alpha = 0.55): strin
   return side === 'LONG' ? `rgba(239,83,80,${alpha})` : `rgba(38,166,154,${alpha})`;
 }
 
-/** Thang tím → xanh ngọc → vàng (kiểu heatmap), độ đậm tăng theo cường độ 1–255. */
-export function heatColor(intensity: number): string {
+/** Thang tím → xanh ngọc → vàng (kiểu heatmap), độ đậm tăng theo cường độ 1–255; `opacity` nhân độ đậm (kẹp ≤ 1). */
+export function heatColor(intensity: number, opacity = 1): string {
   const x = Math.max(0, Math.min(1, intensity / 255));
   const stops: [number, [number, number, number]][] = [
     [0, [68, 1, 84]],
@@ -30,7 +30,7 @@ export function heatColor(intensity: number): string {
   const [x1, c1] = stops[i + 1]!;
   const k = (x - x0) / (x1 - x0);
   const ch = (j: number) => Math.round(c0[j]! + (c1[j]! - c0[j]!) * k);
-  const alpha = 0.08 + 0.37 * x;
+  const alpha = Math.min(1, (0.08 + 0.37 * x) * opacity);
   return `rgba(${ch(0)},${ch(1)},${ch(2)},${alpha.toFixed(3)})`;
 }
 
