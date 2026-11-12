@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import cors from '@fastify/cors';
+import type { BookmapUiConfig } from '@wca/shared';
 import { AnalysisRepo } from './analysis/repo.ts';
 import { AnalysisService } from './analysis/service.ts';
 import { config, type AppConfig } from './config.ts';
@@ -22,6 +23,8 @@ import { registerKlineRoutes } from './routes/klines.ts';
 import { AgyRunner } from './runner/agyRunner.ts';
 import { ClaudeCodeRunner } from './runner/claudeCodeRunner.ts';
 import type { AgentRunner } from './runner/types.ts';
+import { BinanceOrderflow } from './orderflow/binanceOrderflow.ts';
+import { BookCollector } from './orderflow/collector.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -31,6 +34,8 @@ export interface AppDeps {
   runners?: AgentRunner[];
   logger?: boolean;
   dataDir?: string;
+  /** false = không chạy collector order flow Binance (test). */
+  orderflow?: boolean;
 }
 
 /** Token cho API nội bộ (MCP ↔ server); lưu file để MCP chạy từ Claude Code tương tác cũng đọc được. */
@@ -84,6 +89,32 @@ export async function buildApp(deps: AppDeps = {}) {
         ? new AgyRunner({ agyBin: cfg.agyBin, model: cfg.agyModel, timeoutMs: cfg.agyTimeoutMs, env: mcpEnv, root: ROOT, serverUrl })
         : new ClaudeCodeRunner({ claudeBin: cfg.claudeBin, model: cfg.agentModel, timeoutMs: cfg.agentTimeoutMs, env: mcpEnv }),
     );
+  const collectors =
+    deps.orderflow === false
+      ? []
+      : cfg.orderflowBinanceSymbols.map(
+          symbol =>
+            new BookCollector({
+              symbol,
+              db,
+              bucket: cfg.orderflowBuckets[symbol] ?? 10,
+              sampleSec: cfg.orderflowSampleSec,
+              retainH: cfg.orderflowRetainH,
+              resyncMin: cfg.orderflowResyncMin,
+              bigTradeQty: cfg.orderflowBigTrade[symbol] ?? Number.POSITIVE_INFINITY,
+              log: msg => console.log(msg),
+            }),
+        );
+  const binanceOrderflow = collectors.length
+    ? new BinanceOrderflow({
+        collectors: Object.fromEntries(collectors.map(c => [c.symbol, c])),
+        buckets: cfg.orderflowBuckets,
+        absorptionQty: cfg.orderflowAbsorb,
+        wallMin: cfg.orderflowWallMin,
+      })
+    : undefined;
+  for (const c of collectors) c.start();
+
   const service = new AnalysisService(repo, klines, runners, {
     defaultRunner: cfg.agentRunner,
     instrumentOf: symbol => router.instrument(symbol),
@@ -91,6 +122,8 @@ export async function buildApp(deps: AppDeps = {}) {
     barsPerTf: cfg.agentBarsPerTf,
     screenshotDir: path.join(dataDir, 'screenshots'),
     minRiskReward: cfg.setupMinRr,
+    bookmap: { images: cfg.bookmapImages, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
+    binanceOrderflow,
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -109,10 +142,18 @@ export async function buildApp(deps: AppDeps = {}) {
     xauusdSource: cfg.xauusdSource,
     tiingoConfigured: Boolean(cfg.tiingoApiToken),
     agentMaxTfs: cfg.agentMaxTfs,
+    bookmap: {
+      symbols: service.bookmapSymbols,
+      offsets: Object.fromEntries(service.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
+    } satisfies BookmapUiConfig,
+    orderflow: { binanceSymbols: service.orderflowSymbols },
   }));
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);
 
-  app.addHook('onClose', async () => db.close());
+  app.addHook('onClose', async () => {
+    for (const c of collectors) c.stop();
+    db.close();
+  });
   return { app, klines, db, service, repo, internalToken };
 }

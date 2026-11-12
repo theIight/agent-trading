@@ -1,3 +1,4 @@
+import { expandHome } from './analysis/bookmapSource.ts';
 import { isRunnerId, isTimeframe, SUPPORTED_TFS, type RunnerId, type Timeframe } from '@wca/shared';
 
 function int(name: string, fallback: number): number {
@@ -23,6 +24,28 @@ function runnerList(name: string, fallback: RunnerId[]): RunnerId[] {
   if (!raw) return fallback;
   const list = raw.split(',').map(s => s.trim()).filter(isRunnerId);
   return list.length ? list : fallback;
+}
+
+/** Giá trị số theo symbol từ env `<PREFIX><SYMBOL>`, gộp với mặc định; symbol khác chỉ lấy được qua env. */
+function symbolNums(prefix: string, defaults: Record<string, number>): Record<string, number> {
+  const out = { ...defaults };
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith(prefix) || !raw) continue;
+    const n = Number(raw);
+    if (Number.isFinite(n)) out[key.slice(prefix.length).toUpperCase()] = n;
+  }
+  return out;
+}
+
+/** `BOOKMAP_IMAGE_XAUUSD_HTF=~/ssd/live3.png` → `{ XAUUSD: { htf: '/Users/…/ssd/live3.png' } }`. */
+function bookmapImagePaths(): Record<string, Partial<Record<'htf' | 'ltf', string>>> {
+  const out: Record<string, Partial<Record<'htf' | 'ltf', string>>> = {};
+  for (const [key, raw] of Object.entries(process.env)) {
+    const m = /^BOOKMAP_IMAGE_([A-Z0-9]+)_(HTF|LTF)$/.exec(key);
+    if (!m || !raw?.trim()) continue;
+    (out[m[1]!] ??= {})[m[2]!.toLowerCase() as 'htf' | 'ltf'] = expandHome(raw.trim());
+  }
+  return out;
 }
 
 const defaultTf = (process.env.DEFAULT_TF ?? '4h').toLowerCase();
@@ -69,6 +92,28 @@ export const config = {
   okxVolumeInst: process.env.OKX_VOLUME_INST || 'XAU-USDT-SWAP',
   /** Chu kỳ poll realtime cho nguồn không có WebSocket (OANDA). */
   livePollMs: int('LIVE_POLL_MS', 2000),
+  /** Đường dẫn ảnh Bookmap theo symbol/khung: `BOOKMAP_IMAGE_<SYMBOL>_<HTF|LTF>` (hỗ trợ `~`). Symbol có path mới dùng được Bookmap. */
+  bookmapImages: bookmapImagePaths(),
+  /** Offset mặc định = giá Bookmap − giá app (vàng: GC futures cao hơn spot), theo `BOOKMAP_OFFSET_<SYMBOL>`. */
+  bookmapOffsets: symbolNums('BOOKMAP_OFFSET_', { XAUUSD: 10, BTCUSDT: 0 }),
+  /** Ngưỡng lệch offset (đơn vị giá) để cảnh báo ảnh cũ, theo `BOOKMAP_TOLERANCE_<SYMBOL>`. */
+  bookmapTolerances: symbolNums('BOOKMAP_TOLERANCE_', { XAUUSD: 3, BTCUSDT: 60 }),
+  /** Ảnh chụp cũ hơn số phút này so với lúc gửi → cảnh báo. */
+  bookmapMaxAgeMin: int('BOOKMAP_MAX_AGE_MIN', 30),
+  /** Order flow từ Binance spot (server tự ghi sổ lệnh qua WebSocket), thay ảnh Bookmap cho các symbol này. Rỗng = tắt. */
+  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Bucket giá khi gom sổ lệnh, theo `ORDERFLOW_BUCKET_<SYMBOL>`. */
+  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10 }),
+  /** Tổng lệnh chủ động cùng phía trong 1 giây ≥ khối lượng này (base) → lệnh lớn, theo `ORDERFLOW_BIG_TRADE_<SYMBOL>`.
+   *  BTC spot: aggTrade đơn lẻ hiếm khi > 1 BTC; gộp theo giây ≥ 1 BTC ≈ vài chục lần/giờ. */
+  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1 }),
+  /** Tổng lệnh lớn chủ động tại một bucket (2 giờ) để xét hấp thụ, theo `ORDERFLOW_ABSORB_<SYMBOL>`. */
+  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8 }),
+  /** Khối lượng tối thiểu để một mức tính là tường trong lịch sử tường trên chart, theo `ORDERFLOW_WALL_MIN_<SYMBOL>`. */
+  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8 }),
+  orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
+  orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
+  orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

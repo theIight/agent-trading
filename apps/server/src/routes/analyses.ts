@@ -12,6 +12,8 @@ const startSchema = z.object({
   screenshot: z.string().max(12_000_000).optional(),
   runner: z.string().optional(),
   model: z.string().max(80).optional(),
+  bookmap: z.object({ offset: z.number().finite().optional() }).optional(),
+  orderflow: z.boolean().optional(),
 });
 
 function openSse(req: FastifyRequest, reply: FastifyReply, subscribe: (send: (e: ProgressEvent) => void) => () => void) {
@@ -41,6 +43,47 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     if (!parsed.success) return reply.code(400).send({ error: parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ') });
     try {
       return service.start(parsed.data);
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  // ---------- Ảnh Bookmap theo đường dẫn cấu hình (xem trước trên panel) ----------
+  app.get('/api/bookmap/:symbol', async (req, reply) => {
+    try {
+      return { now: Math.floor(Date.now() / 1000), images: service.bookmapStatus((req.params as { symbol: string }).symbol) };
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  app.get('/api/bookmap/:symbol/:role', async (req, reply) => {
+    const { symbol, role } = req.params as { symbol: string; role: string };
+    try {
+      const img = service.bookmapPreview(symbol, role);
+      return reply.type(img.mimeType).header('cache-control', 'no-store').send(fs.readFileSync(img.file));
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  // ---------- Trạng thái collector order flow Binance ----------
+  app.get('/api/orderflow/:symbol', async (req, reply) => {
+    try {
+      return { now: Math.floor(Date.now() / 1000), ...service.orderflowStatus((req.params as { symbol: string }).symbol) };
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  /** Order flow hiện tại (vẽ sẵn trên chart, không cần phân tích). */
+  app.get('/api/orderflow/:symbol/levels', async (req, reply) => {
+    try {
+      return await service.orderflowLive((req.params as { symbol: string }).symbol);
     } catch (err) {
       if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
       throw err;
@@ -97,6 +140,24 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
       const file = service.screenshotPath((req.params as { id: string }).id);
       if (!fs.existsSync(file)) return reply.code(404).send({ error: 'Không có ảnh chart' });
       return reply.type('image/png').send(fs.readFileSync(file));
+    });
+
+    internal.get('/internal/analyses/:id/bookmap', async (req, reply) => {
+      try {
+        return await service.bookmapImages((req.params as { id: string }).id);
+      } catch (err) {
+        if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+        throw err;
+      }
+    });
+
+    internal.get('/internal/analyses/:id/orderflow', async (req, reply) => {
+      try {
+        return service.orderflowSnapshot((req.params as { id: string }).id);
+      } catch (err) {
+        if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+        throw err;
+      }
     });
 
     internal.post('/internal/submit', async req => {

@@ -1,4 +1,4 @@
-import type { AnalysisRecord, AnalysisResult, AnalysisStatus } from '@wca/shared';
+import { ORDERFLOW_SOURCES, type AnalysisRecord, type AnalysisResult, type AnalysisStatus, type OrderflowSource } from '@wca/shared';
 import type { Db } from '../db/index.ts';
 
 interface Row {
@@ -13,6 +13,8 @@ interface Row {
   error: string | null;
   runner: string | null;
   model: string | null;
+  bookmap: number | null;
+  orderflow_source: string | null;
 }
 
 function toRecord(row: Row, withResult = true): AnalysisRecord {
@@ -24,6 +26,12 @@ function toRecord(row: Row, withResult = true): AnalysisRecord {
     status: row.status,
     runner: row.runner ?? 'claude-code',
     model: row.model ?? undefined,
+    ...(row.bookmap ? { bookmap: true } : {}),
+    ...((ORDERFLOW_SOURCES as readonly string[]).includes(row.orderflow_source ?? '')
+      ? { orderflowSource: row.orderflow_source as OrderflowSource }
+      : row.bookmap
+        ? { orderflowSource: 'bookmap-image' as const }
+        : {}),
     createdAt: row.created_at,
     finishedAt: row.finished_at ?? undefined,
     result: withResult && row.result ? (JSON.parse(row.result) as AnalysisResult) : undefined,
@@ -34,10 +42,23 @@ function toRecord(row: Row, withResult = true): AnalysisRecord {
 export class AnalysisRepo {
   constructor(private readonly db: Db) {}
 
-  create(rec: Pick<AnalysisRecord, 'id' | 'symbol' | 'primaryTf' | 'tfs' | 'status' | 'createdAt' | 'runner' | 'model'>): void {
+  create(rec: Pick<AnalysisRecord, 'id' | 'symbol' | 'primaryTf' | 'tfs' | 'status' | 'createdAt' | 'runner' | 'model' | 'bookmap' | 'orderflowSource'>): void {
     this.db
-      .prepare(`INSERT INTO analyses (id, symbol, primary_tf, tfs, status, created_at, runner, model) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`)
-      .run(rec.id, rec.symbol, rec.primaryTf, JSON.stringify(rec.tfs), rec.status, rec.createdAt, rec.runner ?? null, rec.model ?? null);
+      .prepare(
+        `INSERT INTO analyses (id, symbol, primary_tf, tfs, status, created_at, runner, model, bookmap, orderflow_source) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        rec.id,
+        rec.symbol,
+        rec.primaryTf,
+        JSON.stringify(rec.tfs),
+        rec.status,
+        rec.createdAt,
+        rec.runner ?? null,
+        rec.model ?? null,
+        rec.bookmap ? 1 : null,
+        rec.orderflowSource ?? null,
+      );
   }
 
   get(id: string): AnalysisRecord | null {

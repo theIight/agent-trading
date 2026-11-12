@@ -7,6 +7,8 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import { z } from 'zod';
 import { analysisSubmissionSchema, normalizeSymbol, RUN_CONTEXT_ENV, SUPPORTED_TFS, type KlinesResponse } from '@wca/shared';
 import { computeFeatures } from '../../server/src/features/index.ts';
+import type { BinanceOrderflowSnapshot } from '../../server/src/orderflow/calc.ts';
+import { formatOrderflowForAgent } from '../../server/src/orderflow/format.ts';
 import { formatKlinesCsv, MIN_BARS, resolveKlineArgs, resolveParam } from './format.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
@@ -65,7 +67,7 @@ server.registerTool(
   'get_analysis_request',
   {
     title: 'Yêu cầu phân tích',
-    description: 'Lấy thông tin phân tích được giao: symbol, khung chính, thứ tự khung top-down (lớn → nhỏ) kèm vai trò, có ảnh chart hay không, giá đóng cửa gần nhất của khung chính (lastClose), R:R tối thiểu của setup (minRiskReward) và instrument (nguồn dữ liệu, volumeType: contract | tick).',
+    description: 'Lấy thông tin phân tích được giao: symbol, khung chính, thứ tự khung top-down (lớn → nhỏ) kèm vai trò, có ảnh chart hay không, giá đóng cửa gần nhất của khung chính (lastClose), R:R tối thiểu của setup (minRiskReward), instrument (nguồn dữ liệu, volumeType: contract | tick) và nguồn order flow (bookmap = ảnh, orderflow = Binance).',
     inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
   },
   async ({ analysisId: idArg }) => {
@@ -135,6 +137,62 @@ server.registerTool(
       if (!res.ok) return fail('Không có ảnh chart cho phân tích này');
       const data = Buffer.from(await res.arrayBuffer()).toString('base64');
       return { content: [{ type: 'image' as const, data, mimeType: 'image/png' }] };
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  },
+);
+
+server.registerTool(
+  'get_bookmap_images',
+  {
+    title: 'Ảnh Bookmap (order flow)',
+    description:
+      'Ảnh Bookmap người dùng gửi (chỉ XAUUSD / BTCUSDT): htf = khung lớn (zoom rộng), ltf = khung bé. Gồm heatmap thanh khoản, COB (sổ lệnh), SVP (volume profile), ' +
+      'bong bóng lệnh market lớn, CVD. Giá trên ảnh là giá Bookmap (vàng = GC futures, cao hơn spot một khoản offset): ghi bookmapPrice đúng như trên ảnh, server tự quy đổi. ' +
+      'Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
+    inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
+  },
+  async ({ analysisId: idArg }) => {
+    try {
+      const analysisId = resolveParam(idArg, 'analysisId');
+      const res = await call<{
+        symbol: string;
+        meta: { offset: number; instrument: string; capturedAt: number; refPrice?: number | null };
+        images: { role: 'htf' | 'ltf'; mimeType: string; data: string }[];
+      }>(`/internal/analyses/${encodeURIComponent(analysisId)}/bookmap`);
+      const m = res.meta;
+      const header =
+        `Bookmap ${res.symbol} — ${m.instrument}. Offset = ${m.offset} (giá app = giá Bookmap − ${m.offset}). ` +
+        `Chụp lúc ${new Date(m.capturedAt * 1000).toISOString()}${m.refPrice != null ? `, giá app lúc đó ${m.refPrice}` : ''}. ` +
+        `Dùng mức Bookmap cho entry/SL/TP/levels thì PHẢI trừ offset (vd ${m.offset ? `Bookmap X → chart X − ${m.offset}` : 'offset 0: giữ nguyên'}); chỉ orderflow.levels[].bookmapPrice và lastPrices giữ số trên ảnh. ` +
+        'Timestamp góc dưới trái ảnh là vị trí con trỏ, không phải giờ chụp. Đoạn giá đi ngang phẳng = Bookmap không ghi dữ liệu.';
+      const content: ({ type: 'text'; text: string } | { type: 'image'; data: string; mimeType: string })[] = [{ type: 'text', text: header }];
+      for (const img of res.images) {
+        content.push({ type: 'text', text: img.role === 'htf' ? 'Ảnh htf (khung lớn):' : 'Ảnh ltf (khung bé):' });
+        content.push({ type: 'image', data: img.data, mimeType: img.mimeType });
+      }
+      return { content };
+    } catch (err) {
+      return fail((err as Error).message);
+    }
+  },
+);
+
+server.registerTool(
+  'get_orderflow',
+  {
+    title: 'Order flow Binance',
+    description:
+      'Order flow do server tự tính từ Binance spot (chỉ khi get_analysis_request có orderflow): tường thanh khoản trong sổ lệnh kèm thời gian đứng, ' +
+      'POC/HVN/LVN 24h, CVD và phân kỳ, lệnh market lớn, vùng hấp thụ. Giá đã quy đổi về giá chart. Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
+    inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
+  },
+  async ({ analysisId: idArg }) => {
+    try {
+      const analysisId = resolveParam(idArg, 'analysisId');
+      const snap = await call<BinanceOrderflowSnapshot>(`/internal/analyses/${encodeURIComponent(analysisId)}/orderflow`);
+      return text(formatOrderflowForAgent(snap));
     } catch (err) {
       return fail((err as Error).message);
     }

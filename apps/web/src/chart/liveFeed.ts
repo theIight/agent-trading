@@ -1,9 +1,14 @@
 import type { Candle, Timeframe } from '@wca/shared';
 
-const WS_BASE = 'wss://fstream.binance.com/ws';
+// Binance đã chuyển market stream của USDⓈ-M Futures sang `/market/ws`; đường `/ws` cũ vẫn mở kết nối nhưng không gửi dữ liệu.
+const WS_BASE = 'wss://fstream.binance.com/market/ws';
+/** Kết nối mở mà không có message trong khoảng này → coi như chết, kết nối lại (để rộng cho symbol ít giao dịch). */
+export const LIVE_STALE_MS = 60_000;
 
 interface BinanceKlineMsg {
   e: 'kline';
+  /** Giờ sự kiện của sàn (ms). */
+  E: number;
   k: { t: number; o: string; h: string; l: string; c: string; v: string; x: boolean };
 }
 
@@ -14,44 +19,61 @@ interface BinanceKlineMsg {
 export function subscribeLiveKlines(
   symbol: string,
   tf: Timeframe,
-  onCandle: (candle: Candle, closed: boolean) => void,
+  onCandle: (candle: Candle, closed: boolean, eventMs?: number) => void,
   onStatus?: (status: 'connecting' | 'open' | 'closed') => void,
 ): () => void {
   let ws: WebSocket | null = null;
   let stopped = false;
   let retry = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let watchdog: ReturnType<typeof setTimeout> | undefined;
+  let gotData = false;
+
+  // Không có dữ liệu trong LIVE_STALE_MS → đóng để kết nối lại (tránh "Live" mà nến đứng yên).
+  const armWatchdog = (sock: WebSocket) => {
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => sock.close(), LIVE_STALE_MS);
+  };
 
   const connect = () => {
     onStatus?.('connecting');
-    ws = new WebSocket(`${WS_BASE}/${symbol.toLowerCase()}@kline_${tf}`);
-    ws.onopen = () => {
-      retry = 0;
-      onStatus?.('open');
-    };
-    ws.onmessage = ev => {
+    gotData = false;
+    const sock = new WebSocket(`${WS_BASE}/${symbol.toLowerCase()}@kline_${tf}`);
+    ws = sock;
+    sock.onopen = () => armWatchdog(sock);
+    sock.onmessage = ev => {
+      armWatchdog(sock);
+      // Chỉ báo "Live" khi đã thực sự nhận dữ liệu.
+      if (!gotData) {
+        gotData = true;
+        retry = 0;
+        onStatus?.('open');
+      }
       const msg = JSON.parse(ev.data as string) as BinanceKlineMsg;
       if (msg.e !== 'kline') return;
       const k = msg.k;
       onCandle(
         { time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v },
         k.x,
+        msg.E,
       );
     };
-    ws.onclose = () => {
+    sock.onclose = () => {
+      clearTimeout(watchdog);
       // Kết nối cũ đã hủy (đổi symbol/khung) đóng muộn: không được ghi đè trạng thái của kết nối mới.
-      if (stopped) return;
+      if (stopped || ws !== sock) return;
       onStatus?.('closed');
       const delay = Math.min(30_000, 1000 * 2 ** retry++);
       timer = setTimeout(connect, delay);
     };
-    ws.onerror = () => ws?.close();
+    sock.onerror = () => sock.close();
   };
 
   connect();
   return () => {
     stopped = true;
     clearTimeout(timer);
+    clearTimeout(watchdog);
     ws?.close();
   };
 }

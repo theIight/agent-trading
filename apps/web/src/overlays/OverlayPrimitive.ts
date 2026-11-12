@@ -41,6 +41,9 @@ function yOf(ctx: Ctx, price: number): number | null {
 }
 
 const FONT = '11px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
+const OF_FONT = '10px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
+/** Khoảng cách dọc tối thiểu giữa 2 nhãn order flow (px). */
+const OF_LABEL_GAP = 11;
 
 function drawLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') {
   c.font = FONT;
@@ -70,6 +73,78 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
         c.setLineDash([]);
         // Đặt nhãn ngay trên vùng volume (volume chiếm ~18% dưới cùng).
         if (x2 - x1 > 40) drawLabel(c, b.label, (x1 + x2) / 2, mediaSize.height * 0.8 - 8, this.ctx.textColor, 'center');
+      }
+      // Order flow: dải mờ sau nến (dày theo khối lượng), nhãn số nhỏ sát mép phải, không có nhãn trên trục giá.
+      c.font = OF_FONT;
+      c.textAlign = 'right';
+      c.textBaseline = 'middle';
+      const ofLabels: { y: number; text: string; color: string }[] = [];
+      const endLabels: { x: number; y: number; text: string; color: string }[] = [];
+      for (const of of this.ctx.model.orderflowLines) {
+        const y = yOf(this.ctx, of.price);
+        if (y === null) continue;
+        // Đoạn theo thời gian: đầu đoạn trước dữ liệu → mép trái; t2 null → mép phải.
+        let x1 = 0;
+        let x2 = mediaSize.width;
+        if (of.t1 !== undefined) {
+          x1 = Math.max(0, xOf(this.ctx, of.t1) ?? 0);
+          if (of.t2 != null) {
+            const x = xOf(this.ctx, of.t2);
+            if (x === null) continue;
+            x2 = Math.min(mediaSize.width, x);
+          }
+          if (x2 <= 0 || x1 >= mediaSize.width) continue;
+          x2 = Math.max(x2, x1 + 1);
+        }
+        if (of.dashed) {
+          const py = Math.round(y) + 0.5;
+          c.setLineDash([2, 3]);
+          c.lineWidth = 1;
+          c.strokeStyle = of.color;
+          c.beginPath();
+          c.moveTo(x1, py);
+          c.lineTo(x2, py);
+          c.stroke();
+          c.setLineDash([]);
+        } else {
+          // Tường: dải liền dày theo khối lượng, tâm tại mức giá.
+          c.fillStyle = of.color;
+          c.fillRect(x1, y - of.width / 2, x2 - x1, of.width);
+        }
+        if (of.endMark) {
+          // Dấu × tại chỗ giá quét tường.
+          c.strokeStyle = of.textColor;
+          c.lineWidth = 1.2;
+          c.beginPath();
+          c.moveTo(x2 - 3, y - 3);
+          c.lineTo(x2 + 3, y + 3);
+          c.moveTo(x2 + 3, y - 3);
+          c.lineTo(x2 - 3, y + 3);
+          c.stroke();
+        }
+        if (!of.label) continue;
+        if (of.t2 != null) endLabels.push({ x: x2 + 6, y, text: of.label, color: of.textColor });
+        else ofLabels.push({ y, text: of.label, color: of.textColor });
+      }
+      c.textAlign = 'left';
+      // Nhãn cuối đoạn gần nhau (cùng vùng x) → giãn dọc để không đè.
+      endLabels.sort((p, q) => p.y - q.y);
+      for (let i = 1; i < endLabels.length; i++) {
+        const prev = endLabels[i - 1]!;
+        const cur = endLabels[i]!;
+        if (Math.abs(cur.x - prev.x) < 40) cur.y = Math.max(cur.y, prev.y + OF_LABEL_GAP);
+      }
+      for (const l of endLabels) {
+        c.fillStyle = l.color;
+        c.fillText(l.text, l.x, l.y);
+      }
+      c.textAlign = 'right';
+      // Vạch sát nhau → giãn nhãn dọc để không đè (nhãn dưới cùng giữ giữa vạch).
+      ofLabels.sort((p, q) => q.y - p.y);
+      for (let i = 1; i < ofLabels.length; i++) ofLabels[i]!.y = Math.min(ofLabels[i]!.y, ofLabels[i - 1]!.y - OF_LABEL_GAP);
+      for (const l of ofLabels) {
+        c.fillStyle = l.color;
+        c.fillText(l.text, mediaSize.width - 4, l.y);
       }
     });
   }

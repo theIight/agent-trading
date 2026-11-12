@@ -21,6 +21,23 @@ Mặc định (`XAUUSD_SOURCE=tiingo-okx`): **giá vàng giao ngay từ Tiingo +
 
 Phương án khác: `XAUUSD_SOURCE=oanda` (cần `OANDA_API_TOKEN`, `OANDA_ENV=practice|live`, volume = tick volume) hoặc `XAUUSD_SOURCE=binance` (XAUUSDT perp).
 
+## Bookmap (order flow, XAUUSD / BTCUSDT)
+
+Khai báo đường dẫn ảnh mà Bookmap ghi ra (ghi đè liên tục) trong `.env`: `BOOKMAP_IMAGE_<SYMBOL>_HTF` / `_LTF` (hỗ trợ `~`). Trong panel tick **"Dùng ảnh Bookmap"**: panel hiện ảnh xem trước + tuổi ảnh; khi job bắt đầu chạy, server copy ảnh mới nhất cho agent. Agent đọc COB, SVP, heatmap, bong bóng, CVD làm bằng chứng xác nhận (không đổi bối cảnh khung lớn, không đổi entry/SL/TP). Chart (layer "Order flow") chỉ vẽ vạch mờ cho tường lớn (đỏ = bán, xanh = mua, nhãn = khối lượng) và POC.
+
+- Vàng trên Bookmap là **GC futures**, cao hơn XAUUSD spot: giá app = giá Bookmap − offset. Offset mặc định `BOOKMAP_OFFSET_XAUUSD=10` (BTC `0`), sửa được trên form. Khi roll hợp đồng (GCZ → GCG…) offset tăng — cập nhật lại.
+- Giá cuối trên ảnh lệch so với giá app lúc chụp quá `BOOKMAP_TOLERANCE_<SYMBOL>` (vàng 3, BTC 60) → cảnh báo **ảnh có thể đã cũ**. Ảnh chụp quá `BOOKMAP_MAX_AGE_MIN` (30) phút → cảnh báo.
+- Symbol có ít nhất một `BOOKMAP_IMAGE_<SYMBOL>_*` mới hiện tick Bookmap.
+
+## Order flow Binance (BTCUSDT)
+
+Với symbol trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT`), server **tự ghi sổ lệnh và lệnh khớp của Binance spot** qua WebSocket công khai (không cần key) thay vì đọc ảnh Bookmap. Panel có tick **"Dùng order flow Binance"** kèm trạng thái ghi. Khi phân tích, server tính tường thanh khoản kèm thời gian đứng (lọc tường ảo), POC/HVN/LVN 24h, CVD + phân kỳ, hấp thụ; agent đọc qua tool `get_orderflow` và chỉ nhận xét, các mức do server gắn và vẽ.
+
+- Mở chart BTC là thấy ngay tường (dày theo khối lượng) + POC, tự làm mới mỗi 15 giây, không cần chạy phân tích. Giống heatmap Bookmap: tường vẽ từ lúc xuất hiện; tường bị giá quét/hấp thụ dừng ở chỗ bị quét (dấu ×); tường bị rút trước khi giá chạm (lệnh ảo) vẽ nét chấm mờ. Ngưỡng tường `ORDERFLOW_WALL_MIN_BTCUSDT` (mặc định 8). Xem rõ nhất ở khung 1m–15m.
+- Giá đã quy đổi tự động từ spot về giá chart (futures) bằng basis đo lúc lấy.
+- Binance không có lịch sử sổ lệnh: lịch sử bắt đầu từ lúc server chạy (lưu SQLite 24 giờ, restart không mất). Cần ≥ 30 phút để thời gian đứng của tường đáng tin.
+- Vàng vẫn dùng ảnh Bookmap (Binance không có dữ liệu COMEX). Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để BTC quay lại dùng ảnh.
+
 ## Chạy
 
 ```bash

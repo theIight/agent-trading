@@ -161,6 +161,65 @@ export const tradePlanSchema = z.object({
   setups: z.array(tradeSetupSchema).max(2).default([]).describe('Tối đa 2: setup chính (thuận khung lớn) + phương án B'),
 });
 
+// ---------- Order flow từ ảnh Bookmap (tuỳ chọn, chỉ khi người dùng gửi ảnh) ----------
+
+/** Ảnh Bookmap: `htf` = khung lớn (zoom rộng), `ltf` = khung bé (zoom hẹp). */
+export const BOOKMAP_IMAGE_ROLES = ['htf', 'ltf'] as const;
+export type BookmapImageRole = (typeof BOOKMAP_IMAGE_ROLES)[number];
+
+export const ORDERFLOW_LEVEL_KINDS = ['ASK_WALL', 'BID_WALL', 'POC', 'HVN', 'LVN', 'ABSORPTION', 'AGGRESSION'] as const;
+export type OrderflowLevelKind = (typeof ORDERFLOW_LEVEL_KINDS)[number];
+
+/**
+ * Ảnh Bookmap: COB = lệnh chờ trong sổ lệnh lúc chụp; SVP = volume đã khớp trong phiên; BUBBLE = lệnh market lớn.
+ * Binance (server tự tính): BOOK = lệnh chờ trong sổ lệnh; VOLUME = volume đã khớp (profile); TRADES = lệnh market lớn.
+ */
+export const ORDERFLOW_SIZE_SOURCES = ['COB', 'SVP', 'BUBBLE', 'BOOK', 'VOLUME', 'TRADES'] as const;
+
+/** Nguồn order flow của một phân tích. */
+export const ORDERFLOW_SOURCES = ['bookmap-image', 'binance'] as const;
+export type OrderflowSource = (typeof ORDERFLOW_SOURCES)[number];
+
+const bookmapImageSchema = z.enum(BOOKMAP_IMAGE_ROLES);
+
+export const orderflowLevelSchema = z.object({
+  kind: z.enum(ORDERFLOW_LEVEL_KINDS),
+  /** Bắt buộc với nguồn ảnh Bookmap; mức Binance do server tính không có. */
+  image: bookmapImageSchema.optional().describe('Ảnh đọc được mức này: htf (khung lớn) | ltf (khung bé)'),
+  bookmapPrice: price.optional().describe('Giá đúng như trên trục Bookmap, CHƯA quy đổi offset'),
+  /** Server điền = bookmapPrice − offset (giá trên chart của app); Binance: giá spot − basis. */
+  price: price.optional(),
+  /** Binance: giá gốc trên sổ lệnh spot (chưa trừ basis). */
+  sourcePrice: price.optional(),
+  /** Binance: tường đã đứng liên tục bao nhiêu phút (server tính). */
+  persistMin: z.number().nonnegative().optional(),
+  size: z.number().positive().optional().describe('Khối lượng in trên ảnh (COB/SVP). Không có số thì bỏ trống, không ước từ màu heatmap'),
+  sizeSource: z.enum(ORDERFLOW_SIZE_SOURCES).optional(),
+  strength: confidence.default(0.5),
+  note: note.default(''),
+});
+
+export const orderflowSchema = z.object({
+  lastPrices: z
+    .array(z.object({ image: bookmapImageSchema, bookmapPrice: price }))
+    .max(2)
+    .default([])
+    .describe('Giá cuối (ô giá hiện tại) đọc trên từng ảnh — để server kiểm tra ảnh cũ'),
+  summary: z.string().min(1).max(1000).describe('Nhận xét order flow (tiếng Việt): hấp thụ, tường thanh khoản, CVD'),
+  levels: z.array(orderflowLevelSchema).max(12).default([]),
+  cvd: note.default(''),
+  /** Server điền: offset đã dùng để quy đổi. */
+  offset: z.number().optional(),
+  /** Server điền: giá cuối đọc trên ảnh − giá app lúc chụp. */
+  measuredOffset: z.number().optional(),
+  /** Server điền: nguồn dữ liệu (thiếu = ảnh Bookmap, bản ghi cũ). */
+  source: z.enum(ORDERFLOW_SOURCES).optional(),
+  /** Server điền (Binance): thời điểm lấy dữ liệu, unix giây. */
+  asOf: z.number().optional(),
+  /** Server điền (Binance): số phút lịch sử sổ lệnh đã ghi tới lúc lấy. */
+  historyMin: z.number().optional(),
+});
+
 export const topDownStepSchema = z.object({
   tf: tfSchema,
   role: z.enum(['HTF', 'PRIMARY', 'LTF']),
@@ -189,6 +248,8 @@ export const analysisSubmissionSchema = z.object({
   /** Không còn do agent gửi: server suy ra từ `tradePlan` (giữ để tương thích bản ghi cũ). */
   action: tradeActionSchema.optional(),
   tfConflicts: z.array(note).max(10).default([]),
+  /** Chỉ khi phân tích có order flow (ảnh Bookmap hoặc Binance). */
+  orderflow: orderflowSchema.optional(),
 });
 
 export type AnalysisSubmissionInput = z.input<typeof analysisSubmissionSchema>;
@@ -204,6 +265,8 @@ export type TradeSetup = z.output<typeof tradeSetupSchema>;
 export type TradePlan = z.output<typeof tradePlanSchema>;
 export type RefinedEntry = z.output<typeof refinedEntrySchema>;
 export type TradeDecision = (typeof TRADE_DECISIONS)[number];
+export type Orderflow = z.output<typeof orderflowSchema>;
+export type OrderflowLevel = z.output<typeof orderflowLevelSchema>;
 
 /** Bản nộp sau khi validate: `action` luôn có (suy ra từ `tradePlan`). */
 export type ValidatedSubmission = Omit<AnalysisSubmission, 'action'> & { action: TradeAction };
@@ -234,6 +297,10 @@ export interface AnalysisRecord {
   runner?: string;
   /** Model người dùng chọn (không có = mặc định). */
   model?: string;
+  /** Phân tích có kèm ảnh Bookmap. */
+  bookmap?: boolean;
+  /** Nguồn order flow (thiếu: suy ra từ `bookmap`). */
+  orderflowSource?: OrderflowSource;
   status: AnalysisStatus;
   createdAt: number;
   finishedAt?: number;

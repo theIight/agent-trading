@@ -41,6 +41,7 @@ export class ClaudeCodeRunner implements AgentRunner {
   readonly id = 'claude-code' as const;
   readonly label = 'Claude Code';
   readonly supportsScreenshot = true;
+  readonly supportsBookmap = true;
   private avail: { available: boolean; reason?: string } | null = null;
 
   constructor(private readonly opts: ClaudeCodeRunnerOptions) {}

@@ -23,4 +23,6 @@ export interface RunnerInfo {
   models: RunnerModel[];
   /** Agent nhận được ảnh chart qua MCP hay không. */
   supportsScreenshot: boolean;
+  /** Agent nhận được ảnh Bookmap qua MCP hay không. */
+  supportsBookmap: boolean;
 }

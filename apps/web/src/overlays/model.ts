@@ -6,12 +6,13 @@ import {
   type AnalysisResult,
   type Candle,
   type Timeframe,
+  type WallSegment,
 } from '@wca/shared';
 
 // Chuyển AnalysisResult → mô hình vẽ (toạ độ thời gian/giá), độc lập với canvas để test được.
 
-export type LayerKey = 'events' | 'ranges' | 'phases' | 'levels' | 'forecast' | 'action';
-export const LAYER_KEYS: LayerKey[] = ['events', 'ranges', 'phases', 'levels', 'forecast', 'action'];
+export type LayerKey = 'events' | 'ranges' | 'phases' | 'levels' | 'forecast' | 'action' | 'orderflow';
+export const LAYER_KEYS: LayerKey[] = ['events', 'ranges', 'phases', 'levels', 'forecast', 'action', 'orderflow'];
 export const LAYER_LABELS: Record<LayerKey, string> = {
   events: 'Sự kiện',
   ranges: 'Trading Range',
@@ -19,10 +20,11 @@ export const LAYER_LABELS: Record<LayerKey, string> = {
   levels: 'Mức giá',
   forecast: 'Dự đoán',
   action: 'Setup',
+  orderflow: 'Order flow',
 };
 export type LayerVisibility = Record<LayerKey, boolean>;
 export const ALL_LAYERS_ON: LayerVisibility = {
-  events: true, ranges: true, phases: true, levels: true, forecast: true, action: true,
+  events: true, ranges: true, phases: true, levels: true, forecast: true, action: true, orderflow: true,
 };
 
 export const COLORS = {
@@ -40,6 +42,16 @@ export const COLORS = {
   entryZone: 'rgba(255,193,7,0.16)',
   entryZoneStroke: 'rgba(255,193,7,0.8)',
   entry: '#b2b5be',
+  /** Order flow (Bookmap): vạch mờ ~30%, nhãn số đậm hơn để đọc được. */
+  ofAsk: 'rgba(239,83,80,0.3)',
+  ofAskText: 'rgba(239,83,80,0.8)',
+  ofBid: 'rgba(38,166,154,0.3)',
+  ofBidText: 'rgba(38,166,154,0.85)',
+  ofPoc: 'rgba(171,71,188,0.3)',
+  ofPocText: 'rgba(186,104,200,0.85)',
+  /** Tường bị rút (lệnh ảo): nét chấm rất mờ. */
+  ofAskPulled: 'rgba(239,83,80,0.35)',
+  ofBidPulled: 'rgba(38,166,154,0.35)',
   phaseFills: ['rgba(255,193,7,0.06)', 'rgba(156,39,176,0.06)', 'rgba(0,188,212,0.06)', 'rgba(76,175,80,0.06)', 'rgba(255,87,34,0.06)'],
 };
 
@@ -99,17 +111,47 @@ export interface PriceLineItem {
   style: 'solid' | 'dashed' | 'dotted';
 }
 
+/** Vạch order flow: ngang toàn chart, nhãn nhỏ ở mép phải, không gắn nhãn trên trục giá. */
+export interface OrderflowLineItem {
+  price: number;
+  color: string;
+  textColor: string;
+  label: string;
+  /** Độ dày (px): tường dày theo khối lượng, POC mảnh. */
+  width: number;
+  /** POC / tường bị rút: nét chấm; tường: dải liền. */
+  dashed: boolean;
+  /** Đoạn theo thời gian (unix giây): thiếu `t1` = ngang toàn chart; `t2` null = tới mép phải. */
+  t1?: number;
+  t2?: number | null;
+  /** Dấu × ở cuối đoạn (tường bị quét). */
+  endMark?: boolean;
+}
+
+/** Tối đa số đoạn tường đã bị quét / bị rút hiển thị (gần nhất). */
+export const OF_MAX_ENDED_SEGMENTS = 6;
+
+/** Độ dày vạch tường: OF_MIN_WIDTH (rất nhỏ) → OF_MAX_WIDTH (tường lớn nhất cùng nhóm). */
+export const OF_MIN_WIDTH = 1;
+export const OF_MAX_WIDTH = 6;
+
+/** Chỉ vẽ tường có size ≥ tỉ lệ này × tường lớn nhất cùng ảnh. */
+export const OF_MIN_WALL_RATIO = 0.4;
+/** Tối đa số tường mỗi phía (bán / mua). */
+export const OF_MAX_WALLS_PER_SIDE = 3;
+
 export interface OverlayModel {
   markers: MarkerItem[];
   rects: RectItem[];
   bands: BandItem[];
   lines: LineItem[];
   priceLines: PriceLineItem[];
+  orderflowLines: OrderflowLineItem[];
   /** Số nến (khung hiện tại) mà overlay kéo dài sang tương lai — để mở rộng rightOffset. */
   futureBars: number;
 }
 
-export const EMPTY_MODEL: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], futureBars: 0 };
+export const EMPTY_MODEL: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], orderflowLines: [], futureBars: 0 };
 
 /** Ánh xạ thời gian (giây) → chỉ số logic (có phần lẻ) trên khung hiện tại; ngoại suy trước/sau dữ liệu. */
 export function makeTimeMapper(candles: readonly Candle[], tf: Timeframe): (time: number) => number | null {
@@ -172,6 +214,21 @@ export interface BuildOptions {
   selectedSetup?: number | null;
   /** Khi đứng ngoài: vẫn vẽ setup tham khảo. */
   showReferenceSetups?: boolean;
+  /** Order flow hiện tại (live) của symbol đang xem: có thì vẽ thay cho order flow của phân tích, kể cả khi chưa có phân tích. */
+  liveOrderflow?: LiveOrderflowView | null;
+}
+
+type OrderflowLevels = NonNullable<AnalysisResult['orderflow']>['levels'];
+
+/** Order flow live: mức (POC…) + lịch sử tường; có `wallSegments` thì tường vẽ theo đoạn thời gian. */
+export interface LiveOrderflowView {
+  levels: OrderflowLevels;
+  wallSegments?: WallSegment[];
+}
+
+function liveLines(live: LiveOrderflowView): OrderflowLineItem[] {
+  if (!live.wallSegments) return buildOrderflowLines(live.levels);
+  return [...buildWallSegmentLines(live.wallSegments), ...buildOrderflowLines(live.levels.filter(l => l.kind === 'POC'))];
 }
 
 interface PositionTool {
@@ -286,13 +343,17 @@ export function buildOverlayModel(
   currentTf: Timeframe,
   opts: BuildOptions = {},
 ): OverlayModel {
-  if (!analysis || !candles.length) return EMPTY_MODEL;
   const layers = opts.layers ?? ALL_LAYERS_ON;
+  if (!candles.length) return EMPTY_MODEL;
+  if (!analysis) {
+    if (!opts.liveOrderflow || !layers.orderflow) return EMPTY_MODEL;
+    return { ...EMPTY_MODEL, orderflowLines: liveLines(opts.liveOrderflow) };
+  }
   const curSec = tfSeconds(currentTf);
   const visibleTf = (tf: Timeframe) => opts.showLowerTfItems || tfSeconds(tf) >= curSec;
   const tfTag = (tf: Timeframe) => (tf === currentTf ? '' : `·${tfLabel(tf)}`);
   const last = candles[candles.length - 1]!;
-  const model: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], futureBars: 0 };
+  const model: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], orderflowLines: [], futureBars: 0 };
   let maxTime = last.time;
 
   if (layers.events) {
@@ -365,6 +426,9 @@ export function buildOverlayModel(
     }
   }
 
+  if (layers.orderflow && opts.liveOrderflow) model.orderflowLines = liveLines(opts.liveOrderflow);
+  else if (layers.orderflow && analysis.orderflow) model.orderflowLines = buildOrderflowLines(analysis.orderflow.levels);
+
   if (layers.forecast) {
     const ranked = [...analysis.scenarios].sort((a, b) => b.probability - a.probability);
     ranked.forEach((sc, rank) => {
@@ -426,4 +490,98 @@ export function buildOverlayModel(
 
   model.futureBars = Math.max(0, Math.ceil((maxTime - last.time) / curSec));
   return model;
+}
+
+const fmtSize = (n: number) => String(Number(n.toFixed(2)));
+
+/**
+ * Vạch order flow trên chart: chỉ tường lớn (≥ OF_MIN_WALL_RATIO × tường lớn nhất cùng ảnh / sổ lệnh, tối đa
+ * OF_MAX_WALLS_PER_SIDE mỗi phía, phải có size), dày theo khối lượng; POC nét chấm mảnh. HVN/LVN/hấp thụ/lệnh lớn chỉ hiện ở panel.
+ */
+export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[] {
+  const placed = levels.filter(lv => lv.price !== undefined);
+  const walls = placed.filter(lv => (lv.kind === 'ASK_WALL' || lv.kind === 'BID_WALL') && lv.size !== undefined);
+  const maxByImage = new Map<string, number>();
+  for (const w of walls) maxByImage.set(w.image ?? 'book', Math.max(maxByImage.get(w.image ?? 'book') ?? 0, w.size!));
+  const big = walls.filter(w => w.size! >= OF_MIN_WALL_RATIO * maxByImage.get(w.image ?? 'book')!);
+  const out: OrderflowLineItem[] = [];
+  for (const kind of ['ASK_WALL', 'BID_WALL'] as const) {
+    const ask = kind === 'ASK_WALL';
+    big
+      .filter(w => w.kind === kind)
+      .sort((a, b) => b.size! - a.size!)
+      .slice(0, OF_MAX_WALLS_PER_SIDE)
+      .forEach(w => {
+        const ratio = w.size! / maxByImage.get(w.image ?? 'book')!;
+        out.push({
+          price: w.price!,
+          color: ask ? COLORS.ofAsk : COLORS.ofBid,
+          textColor: ask ? COLORS.ofAskText : COLORS.ofBidText,
+          label: fmtSize(w.size!),
+          width: Math.round((OF_MIN_WIDTH + (OF_MAX_WIDTH - OF_MIN_WIDTH) * ratio) * 10) / 10,
+          dashed: false,
+        });
+      });
+  }
+  const pocs = new Set<number>();
+  for (const lv of placed) {
+    if (lv.kind !== 'POC' || pocs.has(lv.price!)) continue;
+    pocs.add(lv.price!);
+    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC', width: 1, dashed: true });
+  }
+  return out;
+}
+
+/**
+ * Lịch sử tường (Binance) thành các đoạn: tường còn tồn tại (≥ 40% tường lớn nhất đang tồn tại, ≤ 3 mỗi phía) kéo tới mép phải;
+ * tường bị quét (đỉnh ≥ 40% tường lớn nhất, ≤ 6 gần nhất) dừng ở lúc bị quét + dấu ×; tường bị rút: nét chấm mờ, không nhãn.
+ * Độ dày theo khối lượng đỉnh so với tường lớn nhất được vẽ.
+ */
+export function buildWallSegmentLines(segments: readonly WallSegment[]): OrderflowLineItem[] {
+  const placed = segments.filter(s => s.price !== undefined);
+  const maxActive = Math.max(0, ...placed.filter(s => s.status === 'active').map(s => s.peakSize));
+  const maxAll = Math.max(0, ...placed.map(s => s.peakSize));
+  const active: WallSegment[] = [];
+  for (const side of ['ASK', 'BID'] as const) {
+    active.push(
+      ...placed
+        .filter(s => s.status === 'active' && s.side === side && s.peakSize >= OF_MIN_WALL_RATIO * maxActive)
+        .sort((a, b) => b.peakSize - a.peakSize)
+        .slice(0, OF_MAX_WALLS_PER_SIDE),
+    );
+  }
+  const ended = (status: WallSegment['status']) =>
+    placed
+      .filter(s => s.status === status && s.peakSize >= OF_MIN_WALL_RATIO * maxAll)
+      .sort((a, b) => (b.end ?? 0) - (a.end ?? 0))
+      .slice(0, OF_MAX_ENDED_SEGMENTS);
+  const consumed = ended('consumed');
+  const pulled = ended('pulled');
+  const maxDrawn = Math.max(0, ...[...active, ...consumed].map(s => s.peakSize));
+  const width = (size: number) => Math.round((OF_MIN_WIDTH + (OF_MAX_WIDTH - OF_MIN_WIDTH) * (maxDrawn ? size / maxDrawn : 0)) * 10) / 10;
+  const solid = (s: WallSegment): OrderflowLineItem => ({
+    price: s.price!,
+    color: s.side === 'ASK' ? COLORS.ofAsk : COLORS.ofBid,
+    textColor: s.side === 'ASK' ? COLORS.ofAskText : COLORS.ofBidText,
+    label: fmtSize(s.peakSize),
+    width: width(s.peakSize),
+    dashed: false,
+    t1: s.start,
+    t2: s.end,
+    endMark: s.status === 'consumed',
+  });
+  return [
+    ...active.map(solid),
+    ...consumed.map(solid),
+    ...pulled.map(s => ({
+      price: s.price!,
+      color: s.side === 'ASK' ? COLORS.ofAskPulled : COLORS.ofBidPulled,
+      textColor: 'transparent',
+      label: '',
+      width: 1,
+      dashed: true,
+      t1: s.start,
+      t2: s.end,
+    })),
+  ];
 }

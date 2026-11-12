@@ -1,16 +1,27 @@
 import { useEffect, useState } from 'react';
 import {
+  bookmapInstrumentLabel,
+  bookmapSizeUnit,
+  ORDERFLOW_KIND_LABELS,
   SUPPORTED_TFS,
   sortTopDown,
   tfLabel,
   type AnalysisRecord,
   type AnalysisResult,
+  type BookmapImageRole,
+  type Orderflow,
   type Timeframe,
   type TradePlan,
   type TradeSetup,
 } from '@wca/shared';
+import { fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
-import { useAnalysisStore, type StepLog } from '../store/useAnalysisStore.ts';
+import {
+  bookmapOffsetOf,
+  bookmapSupported,
+  useAnalysisStore,
+  type StepLog,
+} from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 
 const MAX_TFS = 4;
@@ -23,14 +34,192 @@ const fmtDateTime = (sec: number) =>
 const BIAS_LABEL = { BULLISH: 'Tăng', BEARISH: 'Giảm', NEUTRAL: 'Trung lập' } as const;
 const biasClass = (b: string) => (b === 'BULLISH' ? 'up' : b === 'BEARISH' ? 'down' : 'muted');
 
+const ROLE_LABEL: Record<BookmapImageRole, string> = { htf: 'Khung lớn', ltf: 'Khung bé' };
+
+/** Ảnh cũ hơn số giây này → tô đỏ (Bookmap có thể đã dừng ghi). */
+const BOOKMAP_STALE_SEC = 30 * 60;
+const BOOKMAP_POLL_MS = 10_000;
+
+function fmtAge(sec: number): string {
+  if (sec < 60) return `${Math.max(0, Math.round(sec))} giây trước`;
+  if (sec < 3600) return `${Math.round(sec / 60)} phút trước`;
+  if (sec < 86400) return `${Math.round(sec / 3600)} giờ trước`;
+  return `${Math.round(sec / 86400)} ngày trước`;
+}
+
+/** Ảnh xem trước của một file Bookmap (đường dẫn cấu hình ở server) + tuổi ảnh. */
+function BookmapPreview({ symbol, st, now }: { symbol: string; st: BookmapImageStatus; now: number }) {
+  const age = st.mtime !== undefined ? now - st.mtime : undefined;
+  const stale = age !== undefined && age > BOOKMAP_STALE_SEC;
+  return (
+    <div className={`bm-slot ${st.available ? 'has' : ''}`}>
+      <div className="bm-slot-head">
+        <b>{ROLE_LABEL[st.role]}</b>
+      </div>
+      {st.available ? (
+        <>
+          <a href={`/api/bookmap/${symbol}/${st.role}?t=${st.mtime}`} target="_blank" rel="noreferrer" title="Mở ảnh lớn">
+            <img src={`/api/bookmap/${symbol}/${st.role}?t=${st.mtime}`} alt={`Bookmap ${ROLE_LABEL[st.role]}`} />
+          </a>
+          <div className={`bm-meta ${stale ? 'down' : 'muted'}`} title={stale ? 'Bookmap có đang chạy?' : undefined}>
+            {stale ? `Ảnh cũ (${fmtAge(age!)}) — Bookmap có đang chạy?` : `Cập nhật ${fmtAge(age!)}`}
+          </div>
+        </>
+      ) : (
+        <div className="down bm-meta bm-error" title={st.error}>
+          {st.error}
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** Ảnh Bookmap hiện tại của symbol: làm mới định kỳ, tuổi ảnh tính theo giây. */
+function BookmapPreviews({ symbol }: { symbol: string }) {
+  const [images, setImages] = useState<BookmapImageStatus[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [skew, setSkew] = useState(0);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetchBookmapStatus(symbol).then(
+      r => {
+        if (!alive) return;
+        setImages(r.images);
+        setErr(null);
+        setSkew(r.now - Date.now() / 1000); // lệch giờ client ↔ server
+      },
+      (e: Error) => alive && setErr(e.message),
+    );
+    const t = setTimeout(() => setTick(x => x + 1), BOOKMAP_POLL_MS);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [symbol, tick]);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (err) return <div className="down bm-meta">{err}</div>;
+  if (!images) return <div className="muted bm-meta">Đang đọc ảnh Bookmap…</div>;
+  return (
+    <>
+      <div className="bm-slots">
+        {images.map(st => (
+          <BookmapPreview key={st.role} symbol={symbol} st={st} now={now + skew} />
+        ))}
+      </div>
+      <button type="button" className="chip ghost bm-refresh" onClick={() => setTick(x => x + 1)}>
+        Làm mới ảnh
+      </button>
+    </>
+  );
+}
+
+function BookmapControls({ symbol, disabled }: { symbol: string; disabled: boolean }) {
+  const state = useAnalysisStore();
+  const { useBookmap, setUseBookmap, setBookmapOffset, runners, runner } = state;
+  const runnerInfo = runners.find(r => r.id === runner);
+  if (!bookmapSupported(state, symbol)) return null;
+  const unsupported = runnerInfo ? !runnerInfo.supportsBookmap : false;
+  const offset = bookmapOffsetOf(state, symbol);
+  const defaultOffset = state.bookmapConfig?.offsets[symbol] ?? 0;
+  return (
+    <div className="bookmap">
+      <label className="check">
+        <input type="checkbox" checked={useBookmap && !unsupported} disabled={unsupported || disabled} onChange={e => setUseBookmap(e.target.checked)} />
+        Dùng ảnh Bookmap
+        {unsupported && <span className="muted"> (agent này không nhận ảnh Bookmap)</span>}
+      </label>
+      {useBookmap && !unsupported && (
+        <>
+          <div className="muted bm-meta">Bookmap: {bookmapInstrumentLabel(symbol)}</div>
+          <BookmapPreviews symbol={symbol} />
+          <label className="model-select">
+            <span className="muted">Offset</span>
+            <input
+              type="number"
+              step="0.1"
+              value={offset}
+              disabled={disabled}
+              onChange={e => setBookmapOffset(symbol, e.target.value === '' ? null : Number(e.target.value))}
+              title="Giá Bookmap − giá trên chart app"
+            />
+            {offset !== defaultOffset && (
+              <button type="button" className="chip ghost" disabled={disabled} onClick={() => setBookmapOffset(symbol, null)}>
+                Mặc định {defaultOffset}
+              </button>
+            )}
+          </label>
+          <div className="muted bm-meta">Giá app = giá Bookmap − offset</div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Lịch sử sổ lệnh tối thiểu để tin thời gian đứng của tường (khớp MIN_HISTORY_MIN ở server). */
+const OF_MIN_HISTORY_MIN = 30;
+
+function OrderflowStatusLine({ symbol }: { symbol: string }) {
+  const [st, setSt] = useState<OrderflowStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetchOrderflowStatus(symbol).then(
+        r => alive && (setSt(r), setError(null)),
+        (e: Error) => alive && setError(e.message),
+      );
+    void load();
+    const timer = setInterval(load, BOOKMAP_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [symbol]);
+  if (error) return <div className="bm-meta down">{error}</div>;
+  if (!st) return <div className="muted bm-meta">Đang đọc trạng thái…</div>;
+  const live = st.connected && st.synced;
+  const lag = st.lastSampleAt ? st.now - st.lastSampleAt : null;
+  return (
+    <div className={`bm-meta of-status ${live ? 'muted' : 'down'}`}>
+      {live ? 'Đang ghi sổ lệnh Binance spot' : 'Mất kết nối Binance — đang thử lại'}
+      {st.spotPrice != null && <> · spot {fmtPrice(st.spotPrice)}</>}
+      {' · '}lịch sử {st.historyMin} phút
+      {st.historyMin < OF_MIN_HISTORY_MIN && <> (cần ≥ {OF_MIN_HISTORY_MIN} phút để tin tường)</>}
+      {lag != null && lag > 120 && <> · mẫu cuối {fmtAge(lag)}</>}
+      {st.error && <div className="down">{st.error}</div>}
+    </div>
+  );
+}
+
+function OrderflowControls({ symbol, disabled }: { symbol: string; disabled: boolean }) {
+  const { orderflowSymbols, useOrderflow, setUseOrderflow } = useAnalysisStore();
+  if (!orderflowSymbols.includes(symbol)) return null;
+  return (
+    <div className="bookmap">
+      <label className="check">
+        <input type="checkbox" checked={useOrderflow} disabled={disabled} onChange={e => setUseOrderflow(e.target.checked)} />
+        Dùng order flow Binance
+      </label>
+      {useOrderflow && <OrderflowStatusLine symbol={symbol} />}
+    </div>
+  );
+}
+
 function Controls() {
   const tf = useAppStore(s => s.tf);
   const { contextTfs, toggleContextTf, presets, applyPreset, savePreset, deletePreset, attachScreenshot, setAttachScreenshot, run, analyze, cancel } =
     useAnalysisStore();
-  const { runners, runner, runnerModels, loadRunners, setRunner, setRunnerModel } = useAnalysisStore();
+  const { runners, runner, runnerModels, loadRunners, loadConfig, setRunner, setRunnerModel } = useAnalysisStore();
+  const symbol = useAppStore(s => s.symbol);
   useEffect(() => {
     void loadRunners();
-  }, [loadRunners]);
+    void loadConfig();
+  }, [loadRunners, loadConfig]);
   const runnerInfo = runners.find(r => r.id === runner);
   const ctx = contextTfs.filter(t => t !== tf);
   const order = sortTopDown([tf, ...ctx]);
@@ -139,6 +328,9 @@ function Controls() {
         Gửi kèm ảnh chart cho agent
         {runnerInfo && !runnerInfo.supportsScreenshot && <span className="muted"> (agent này không nhận ảnh)</span>}
       </label>
+
+      <BookmapControls symbol={symbol} disabled={Boolean(run)} />
+      <OrderflowControls symbol={symbol} disabled={Boolean(run)} />
 
       {run ? (
         <button type="button" className="btn danger" onClick={() => void cancel()}>
@@ -297,6 +489,67 @@ function LegacyAction({ a }: { a: AnalysisResult }) {
   );
 }
 
+function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
+  const unit = bookmapSizeUnit(symbol);
+  const binance = of.source === 'binance';
+  const drift = of.measuredOffset !== undefined && of.offset !== undefined ? of.measuredOffset - of.offset : undefined;
+  return (
+    <div className="orderflow">
+      <div className="of-legend muted">
+        <span className="of-ask">━ tường bán</span> <span className="of-bid">━ tường mua</span> <span className="of-poc">━ POC</span>
+        <span> · số trên chart = khối lượng</span>
+      </div>
+      <p className="note">{of.summary}</p>
+      {of.cvd && (
+        <div className="note">
+          <b>CVD:</b> {of.cvd}
+        </div>
+      )}
+      {of.levels.length > 0 && (
+        <ul className="events">
+          {of.levels.map((lv, i) => (
+            <li key={i}>
+              <b>{ORDERFLOW_KIND_LABELS[lv.kind]}</b> {fmtPrice(lv.price)}{' '}
+              {binance ? (
+                lv.persistMin !== undefined && <span className="muted">(đứng {Math.round(lv.persistMin)} phút)</span>
+              ) : (
+                <span className="muted">
+                  (Bookmap {fmtPrice(lv.bookmapPrice)}
+                  {lv.image && <> · {ROLE_LABEL[lv.image].toLowerCase()}</>})
+                </span>
+              )}
+              {lv.size !== undefined && (
+                <span>
+                  {' '}
+                  · {Number(lv.size.toFixed(2))} {unit} <span className="muted">{lv.sizeSource}</span>
+                </span>
+              )}
+              {lv.note && <div className="note">{lv.note}</div>}
+            </li>
+          ))}
+        </ul>
+      )}
+      {binance ? (
+        <div className="muted note">
+          Binance spot{of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>} · basis spot − chart {of.offset ?? 0}
+          {of.historyMin !== undefined && <> · lịch sử sổ lệnh {Math.round(of.historyMin)} phút</>}
+        </div>
+      ) : (
+      <div className="muted note">
+        Offset dùng {of.offset ?? '—'}
+        {of.measuredOffset !== undefined && (
+          <>
+            {' '}
+            · đo được {of.measuredOffset}
+            {drift !== undefined && Math.abs(drift) > 0 && <> (lệch {drift > 0 ? '+' : ''}{Number(drift.toFixed(2))})</>}
+          </>
+        )}
+      </div>
+      )}
+    </div>
+  );
+}
+
 function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | null }) {
   return (
     <section className="panel-section result">
@@ -323,6 +576,13 @@ function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | nul
 
       <div className="section-title">Setup</div>
       {a.tradePlan ? <TradePlanCard plan={a.tradePlan} /> : <LegacyAction a={a} />}
+
+      {a.orderflow && (
+        <>
+          <div className="section-title">Order flow ({a.orderflow.source === 'binance' ? 'Binance' : 'Bookmap'})</div>
+          <OrderflowCard of={a.orderflow} symbol={a.symbol} />
+        </>
+      )}
 
       {a.scenarios.length > 0 && (
         <>
@@ -393,6 +653,17 @@ function History() {
               <b>{new Date(h.createdAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>{' '}
               <span className="muted">{h.tfs.map(t => tfLabel(t as Timeframe)).join(' → ')}</span>{' '}
               <span className="muted">· {runnerLabel(h)}</span>
+              {h.orderflowSource === 'binance' ? (
+                <span className="badge bm" title="Có dùng order flow Binance">
+                  OF
+                </span>
+              ) : (
+                h.bookmap && (
+                  <span className="badge bm" title="Có dùng ảnh Bookmap">
+                    BM
+                  </span>
+                )
+              )}
             </div>
             {h.result ? (
               <div>

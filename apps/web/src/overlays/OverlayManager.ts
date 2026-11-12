@@ -2,7 +2,7 @@ import { LineStyle, createSeriesMarkers, type IPriceLine, type ISeriesMarkersPlu
 import type { AnalysisResult } from '@wca/shared';
 import type { ChartController } from '../chart/ChartController.ts';
 import { THEMES, type ThemeName } from '../chart/theme.ts';
-import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, type LayerVisibility, type OverlayModel } from './model.ts';
+import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, type LayerVisibility, type LiveOrderflowView, type OverlayModel } from './model.ts';
 import { OverlayPrimitive } from './OverlayPrimitive.ts';
 
 export interface SetupView {
@@ -23,6 +23,7 @@ export class OverlayManager {
   private priceLines: IPriceLine[] = [];
   private model: OverlayModel | null = null;
   private setupView: SetupView = { selectedSetup: null, showReferenceSetups: false };
+  private liveOrderflow: (LiveOrderflowView & { symbol: string }) | null = null;
 
   constructor(private readonly ctrl: ChartController) {
     ctrl.candleSeries.attachPrimitive(this.primitive);
@@ -48,6 +49,12 @@ export class OverlayManager {
     this.render();
   }
 
+  /** Order flow hiện tại (live) theo symbol; null = không có. */
+  setLiveOrderflow(live: (LiveOrderflowView & { symbol: string }) | null): void {
+    this.liveOrderflow = live;
+    this.render();
+  }
+
   setTheme(theme: ThemeName): void {
     this.theme = theme;
     this.render();
@@ -60,7 +67,8 @@ export class OverlayManager {
     // Chỉ vẽ phân tích của đúng symbol đang xem: hình vẽ của symbol cũ (vd BTC 70k)
     // vừa sai ngữ cảnh vừa kéo thang giá khiến không thấy nến symbol mới (vd NEAR 3.5).
     const analysis = this.analysis && this.analysis.symbol === this.ctrl.getSymbol() ? this.analysis : null;
-    const model = buildOverlayModel(analysis, candles, tf, { layers: this.layers, ...this.setupView });
+    const live = this.liveOrderflow?.symbol === this.ctrl.getSymbol() ? this.liveOrderflow : null;
+    const model = buildOverlayModel(analysis, candles, tf, { layers: this.layers, ...this.setupView, liveOrderflow: live });
     this.model = model;
 
     this.markers.setMarkers(

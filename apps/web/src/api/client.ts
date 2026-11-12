@@ -1,4 +1,4 @@
-import type { AnalysisRecord, InstrumentInfo, KlinesResponse, ProgressEvent, RunnerId, RunnerInfo, Timeframe } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -6,6 +6,8 @@ export interface ServerConfig {
   supportedTfs: Timeframe[];
   defaultContextTfs: Timeframe[];
   agentMaxTfs: number;
+  bookmap?: BookmapUiConfig;
+  orderflow?: { binanceSymbols: string[] };
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -40,8 +42,58 @@ export function startAnalysis(body: {
   screenshot?: string;
   runner?: RunnerId;
   model?: string;
+  bookmap?: { offset?: number };
+  orderflow?: boolean;
 }): Promise<AnalysisRecord> {
   return request('/api/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+export interface BookmapImageStatus {
+  role: 'htf' | 'ltf';
+  available: boolean;
+  mtime?: number;
+  size?: number;
+  error?: string;
+}
+
+/** Trạng thái file ảnh Bookmap (đường dẫn cấu hình ở server). */
+export function fetchBookmapStatus(symbol: string): Promise<{ now: number; images: BookmapImageStatus[] }> {
+  return request(`/api/bookmap/${encodeURIComponent(symbol)}`);
+}
+
+export interface OrderflowStatus {
+  now: number;
+  symbol: string;
+  connected: boolean;
+  synced: boolean;
+  since: number | null;
+  lastSampleAt: number | null;
+  historyMin: number;
+  spotPrice: number | null;
+  error?: string;
+}
+
+/** Trạng thái collector order flow Binance của symbol. */
+export function fetchOrderflowStatus(symbol: string): Promise<OrderflowStatus> {
+  return request(`/api/orderflow/${encodeURIComponent(symbol)}`);
+}
+
+export interface LiveOrderflow {
+  source: 'binance';
+  symbol: string;
+  asOf: number;
+  historyMin: number;
+  basis: number;
+  connected: boolean;
+  notes: string[];
+  levels: OrderflowLevel[];
+  /** Lịch sử tường 24h (giá đã quy đổi). */
+  wallSegments?: WallSegment[];
+}
+
+/** Order flow hiện tại của symbol (vẽ sẵn trên chart). */
+export function fetchLiveOrderflow(symbol: string): Promise<LiveOrderflow> {
+  return request(`/api/orderflow/${encodeURIComponent(symbol)}/levels`);
 }
 
 export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {

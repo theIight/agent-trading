@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { sortTopDown, type AnalysisRecord, type AnalysisResult, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
-import { cancelAnalysis, fetchAnalysis, fetchHistory, fetchRunners, startAnalysis, subscribeSse } from '../api/client.ts';
+import { sortTopDown, type AnalysisRecord, type BookmapUiConfig, type AnalysisResult, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
+import { cancelAnalysis, fetchAnalysis, fetchConfig, fetchHistory, fetchRunners, startAnalysis, subscribeSse } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import { ALL_LAYERS_ON, type LayerKey, type LayerVisibility } from '../overlays/model.ts';
 import { useAppStore } from './useAppStore.ts';
@@ -22,6 +22,10 @@ const PRESET_KEY = 'wca:presets';
 const CONTEXT_KEY = 'wca:contextTfs';
 const RUNNER_KEY = 'wca:runner';
 const MODELS_KEY = 'wca:runnerModels';
+const USE_BOOKMAP_KEY = 'wca:useBookmap';
+const BOOKMAP_OFFSETS_KEY = 'wca:bookmapOffsets';
+const USE_ORDERFLOW_KEY = 'wca:useBinanceOrderflow';
+const LAYER_ORDERFLOW_KEY = 'wca:layerOrderflow';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -64,6 +68,16 @@ interface AnalysisState {
   contextTfs: Timeframe[];
   presets: Preset[];
   attachScreenshot: boolean;
+  /** Cấu hình Bookmap từ server (symbol hỗ trợ, offset mặc định). */
+  bookmapConfig: BookmapUiConfig | null;
+  /** Checkbox "Dùng ảnh Bookmap". */
+  useBookmap: boolean;
+  /** Symbol có order flow Binance (server tự tính). */
+  orderflowSymbols: string[];
+  /** Checkbox "Dùng order flow Binance". */
+  useOrderflow: boolean;
+  /** Offset người dùng sửa theo symbol (không có = mặc định server). */
+  bookmapOffsets: Record<string, number>;
   /** Agent khả dụng (từ server). */
   runners: RunnerInfo[];
   /** Agent đang chọn (null = mặc định của server). */
@@ -79,6 +93,10 @@ interface AnalysisState {
   setShowReferenceSetups: (v: boolean) => void;
   toggleContextTf: (tf: Timeframe, maxTotal: number) => void;
   setAttachScreenshot: (v: boolean) => void;
+  loadConfig: () => Promise<void>;
+  setUseBookmap: (v: boolean) => void;
+  setUseOrderflow: (v: boolean) => void;
+  setBookmapOffset: (symbol: string, offset: number | null) => void;
   loadRunners: () => Promise<void>;
   setRunner: (r: RunnerId) => void;
   setRunnerModel: (r: RunnerId, model: string) => void;
@@ -96,12 +114,17 @@ interface AnalysisState {
 export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   current: null,
   currentRecord: null,
-  layers: { ...ALL_LAYERS_ON },
+  layers: { ...ALL_LAYERS_ON, orderflow: load<boolean>(LAYER_ORDERFLOW_KEY, true) },
   selectedSetup: null,
   showReferenceSetups: false,
   contextTfs: load<Timeframe[]>(CONTEXT_KEY, ['1d', '5m']),
   presets: load<Preset[]>(PRESET_KEY, DEFAULT_PRESETS),
   attachScreenshot: false,
+  bookmapConfig: null,
+  useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
+  orderflowSymbols: [],
+  useOrderflow: load<boolean>(USE_ORDERFLOW_KEY, true),
+  bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
   runner: load<RunnerId | null>(RUNNER_KEY, null),
   runnerModels: load<Partial<Record<RunnerId, string>>>(MODELS_KEY, {}),
@@ -112,7 +135,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setCurrent: current => set({ current, selectedSetup: null }),
   selectSetup: i => set(s => ({ selectedSetup: s.selectedSetup === i ? null : i })),
   setShowReferenceSetups: showReferenceSetups => set({ showReferenceSetups }),
-  toggleLayer: key => set(s => ({ layers: { ...s.layers, [key]: !s.layers[key] } })),
+  toggleLayer: key => {
+    const layers = { ...get().layers, [key]: !get().layers[key] };
+    set({ layers });
+    if (key === 'orderflow') save(LAYER_ORDERFLOW_KEY, layers.orderflow);
+  },
 
   toggleContextTf: (tf, maxTotal) => {
     const { contextTfs } = get();
@@ -126,6 +153,33 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   },
 
   setAttachScreenshot: attachScreenshot => set({ attachScreenshot }),
+
+  loadConfig: async () => {
+    try {
+      const cfg = await fetchConfig();
+      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [] });
+    } catch {
+      /* server chưa chạy */
+    }
+  },
+
+  setUseBookmap: useBookmap => {
+    set({ useBookmap });
+    save(USE_BOOKMAP_KEY, useBookmap);
+  },
+
+  setUseOrderflow: useOrderflow => {
+    set({ useOrderflow });
+    save(USE_ORDERFLOW_KEY, useOrderflow);
+  },
+
+  setBookmapOffset: (symbol, offset) => {
+    const next = { ...get().bookmapOffsets };
+    if (offset === null || !Number.isFinite(offset)) delete next[symbol];
+    else next[symbol] = offset;
+    set({ bookmapOffsets: next });
+    save(BOOKMAP_OFFSETS_KEY, next);
+  },
 
   loadRunners: async () => {
     try {
@@ -180,7 +234,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const info = runners.find(r => r.id === runner);
       const screenshot = get().attachScreenshot && (info?.supportsScreenshot ?? true) ? chartRegistry.screenshot() : undefined;
       const model = runner ? runnerModels[runner] || undefined : undefined;
-      const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model });
+      // Ảnh Bookmap do server đọc từ đường dẫn cấu hình, lúc job bắt đầu chạy.
+      const bookmap = bookmapEnabled(get(), symbol, info) ? { offset: bookmapOffsetOf(get(), symbol) } : undefined;
+      const orderflow = orderflowEnabled(get(), symbol) || undefined;
+      const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model, bookmap, orderflow });
       const order = sortTopDown(rec.tfs as Timeframe[]).join(' → ');
       const who = `${info?.label ?? rec.runner ?? 'agent'} · ${model ?? info?.defaultModel ?? 'model mặc định'}`;
       const steps: StepLog[] = [{ at: Date.now(), kind: 'status', message: `Bắt đầu: ${rec.symbol} · ${order} · ${who}` }];
@@ -251,3 +308,22 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 }));
+
+/** Dùng order flow Binance khi symbol có collector + tick bật. */
+export function orderflowEnabled(s: Pick<AnalysisState, 'orderflowSymbols' | 'useOrderflow'>, symbol: string): boolean {
+  return s.orderflowSymbols.includes(symbol) && s.useOrderflow;
+}
+
+/** Symbol có hỗ trợ Bookmap (theo cấu hình server). */
+export function bookmapSupported(s: Pick<AnalysisState, 'bookmapConfig'>, symbol: string): boolean {
+  return Boolean(s.bookmapConfig?.symbols.includes(symbol));
+}
+
+/** Gửi ảnh Bookmap khi: symbol hỗ trợ + tick bật + agent nhận được ảnh Bookmap. */
+export function bookmapEnabled(s: Pick<AnalysisState, 'bookmapConfig' | 'useBookmap'>, symbol: string, runner?: RunnerInfo): boolean {
+  return bookmapSupported(s, symbol) && s.useBookmap && (runner?.supportsBookmap ?? true);
+}
+
+export function bookmapOffsetOf(s: Pick<AnalysisState, 'bookmapConfig' | 'bookmapOffsets'>, symbol: string): number {
+  return s.bookmapOffsets[symbol] ?? s.bookmapConfig?.offsets[symbol] ?? 0;
+}

@@ -5,6 +5,7 @@ import { OverlayManager } from '../overlays/OverlayManager.ts';
 import { buildDemoAnalysis, type DemoVariant } from '../overlays/demoAnalysis.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
+import { useOrderflowStore } from '../store/useOrderflowStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
 
 function fmt(n: number): string {
@@ -36,7 +37,9 @@ export function ChartView({ onStatus, onReady }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [instrument, setInstrument] = useState<InstrumentInfo | null>(null);
   const { symbol, tf, theme } = useAppStore();
-  const { current, layers, setCurrent, selectedSetup, showReferenceSetups } = useAnalysisStore();
+  const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols } = useAnalysisStore();
+  const { data: liveOf, error: liveOfError, watch: watchOrderflow } = useOrderflowStore();
+  const liveOfSymbol = orderflowSymbols.includes(symbol) ? symbol : null;
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -87,6 +90,16 @@ export function ChartView({ onStatus, onReady }: Props) {
     overlayRef.current?.setLayers(layers);
   }, [layers]);
 
+  // Order flow live (BTC): poll theo symbol đang xem.
+  useEffect(() => {
+    watchOrderflow(liveOfSymbol);
+    return () => watchOrderflow(null);
+  }, [liveOfSymbol, watchOrderflow]);
+
+  useEffect(() => {
+    overlayRef.current?.setLiveOrderflow(liveOf ? { symbol: liveOf.symbol, levels: liveOf.levels, wallSegments: liveOf.wallSegments } : null);
+  }, [liveOf]);
+
   useEffect(() => {
     overlayRef.current?.setSetupView({ selectedSetup, showReferenceSetups });
   }, [selectedSetup, showReferenceSetups]);
@@ -116,6 +129,16 @@ export function ChartView({ onStatus, onReady }: Props) {
         )}
       </div>
       <LayerToggles />
+      {liveOfSymbol && layers.orderflow && (liveOfError || (liveOf && (!liveOf.connected || liveOf.historyMin < 30))) && (
+        <div className={`of-chart-status ${liveOfError || !liveOf?.connected ? 'down' : 'muted'}`}>
+          Order flow:{' '}
+          {liveOfError
+            ? `lỗi tải (${liveOfError})`
+            : !liveOf!.connected
+              ? 'mất kết nối Binance — đang giữ vạch cũ'
+              : `lịch sử ${Math.round(liveOf!.historyMin)} phút (cần ≥ 30 phút để tin tường)`}
+        </div>
+      )}
       {error && <div className="chart-error">Lỗi tải dữ liệu: {error}</div>}
     </div>
   );

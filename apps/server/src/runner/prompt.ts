@@ -22,6 +22,12 @@ export function buildUserPrompt(req: AgentRunRequest): string {
     `Thứ tự phân tích top-down (bắt buộc): ${order}`,
     `Số nến mặc định mỗi khung: ${req.barsPerTf}`,
     req.hasScreenshot ? 'Có ảnh chart: gọi get_chart_screenshot để đối chiếu.' : 'Không có ảnh chart.',
+    ...(req.hasBookmap
+      ? ['Có ảnh Bookmap (order flow): gọi get_bookmap_images sau khi đã phân tích khung lớn, làm theo mục "Bookmap (order flow)" trong system prompt và nộp trường `orderflow`.']
+      : []),
+    ...(req.hasBinanceOrderflow
+      ? ['Có order flow Binance (server tự tính từ sổ lệnh/lệnh khớp): gọi get_orderflow sau khi đã phân tích khung lớn, làm theo mục "Order flow Binance" trong system prompt và nộp `orderflow` chỉ gồm summary + cvd.']
+      : []),
     '',
     `Làm theo quy trình trong system prompt rồi gọi submit_analysis với analysisId="${req.analysisId}".`,
   ].join('\n');
