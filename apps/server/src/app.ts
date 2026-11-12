@@ -28,6 +28,8 @@ import { BookCollector } from './orderflow/collector.ts';
 import { LiquidationCollector } from './liquidation/collector.ts';
 import { LiquidationService } from './liquidation/service.ts';
 import { parseLeverage } from './liquidation/model.ts';
+import { VolumeAggService } from './volumeAgg/service.ts';
+import { makeVolumeFetcher } from './volumeAgg/sources.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -145,6 +147,19 @@ export async function buildApp(deps: AppDeps = {}) {
   for (const c of liqCollectors) c.start();
   liquidation?.start();
 
+  const volumeAgg = cfg.volAggSymbols.length
+    ? new VolumeAggService({
+        db,
+        // BTCUSDT → OKX BTC-USDT-SWAP; Binance/Bybit cùng tên.
+        symbols: Object.fromEntries(
+          cfg.volAggSymbols.map(s => [s, { binanceFut: s, binanceSpot: s, bybit: s, okx: `${s.replace(/USDT$/, '')}-USDT-SWAP` }]),
+        ),
+        spikeX: cfg.volAggSpikeX,
+        fetcher: makeVolumeFetcher(),
+        log: msg => console.log(msg),
+      })
+    : undefined;
+
   const service = new AnalysisService(repo, klines, runners, {
     defaultRunner: cfg.agentRunner,
     instrumentOf: symbol => router.instrument(symbol),
@@ -155,6 +170,7 @@ export async function buildApp(deps: AppDeps = {}) {
     bookmap: { images: cfg.bookmapImages, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
     binanceOrderflow,
     liquidation,
+    volumeAgg,
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -179,6 +195,7 @@ export async function buildApp(deps: AppDeps = {}) {
     } satisfies BookmapUiConfig,
     orderflow: { binanceSymbols: service.orderflowSymbols },
     liquidation: { symbols: liquidation?.symbols ?? [] },
+    volumeAgg: { symbols: volumeAgg?.symbols ?? [] },
   }));
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);

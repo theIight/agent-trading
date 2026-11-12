@@ -102,6 +102,17 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     }
   });
 
+  /** Volume gộp nhiều sàn (nến đã đóng): perp + spot từng nến, đột biến. */
+  app.get('/api/volume-agg/:symbol', async (req, reply) => {
+    try {
+      const { tf, limit } = req.query as { tf?: string; limit?: string };
+      return await service.volumeAggregate((req.params as { symbol: string }).symbol, tf ?? '1h', Number(limit) || 500);
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
   app.get('/api/analyses', async req => {
     const { symbol, limit } = req.query as { symbol?: string; limit?: string };
     return repo.list(symbol ? normalizeSymbol(symbol) : undefined, Math.min(Number(limit) || 50, 200));

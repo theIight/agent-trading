@@ -9,6 +9,9 @@ export interface ChartTheme {
   down: string;
   upVolume: string;
   downVolume: string;
+  /** Màu đặc (đã trộn với nền) của cột volume khi bật volume gộp: cột spot vẽ phía sau không được lộ qua. */
+  upVolumeSolid: string;
+  downVolumeSolid: string;
   crosshair: string;
 }
 
@@ -23,6 +26,8 @@ export const THEMES: Record<ThemeName, ChartTheme> = {
     down: '#ef5350',
     upVolume: 'rgba(38,166,154,0.45)',
     downVolume: 'rgba(239,83,80,0.45)',
+    upVolumeSolid: 'rgb(28,87,88)',
+    downVolumeSolid: 'rgb(118,50,55)',
     crosshair: '#758696',
   },
   light: {
@@ -34,6 +39,8 @@ export const THEMES: Record<ThemeName, ChartTheme> = {
     down: '#f23645',
     upVolume: 'rgba(8,153,129,0.4)',
     downVolume: 'rgba(242,54,69,0.4)',
+    upVolumeSolid: 'rgb(156,214,205)',
+    downVolumeSolid: 'rgb(250,175,181)',
     crosshair: '#9598a1',
   },
 };

@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -9,6 +9,12 @@ export interface ServerConfig {
   bookmap?: BookmapUiConfig;
   orderflow?: { binanceSymbols: string[] };
   liquidation?: { symbols: string[] };
+  volumeAgg?: { symbols: string[] };
+}
+
+/** Volume gộp nhiều sàn (nến đã đóng) + đột biến. */
+export function fetchVolumeAgg(symbol: string, tf: Timeframe, limit: number): Promise<VolumeAggResponse> {
+  return request(`/api/volume-agg/${encodeURIComponent(symbol)}?${new URLSearchParams({ tf, limit: String(limit) })}`);
 }
 
 /** Thanh lý cho chart: bong bóng theo nến khung `tf` + heatmap ước tính. */

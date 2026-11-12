@@ -30,6 +30,7 @@ import { referencedTfs, validateSubmission } from '../validate/index.ts';
 import type { AnalysisRepo } from './repo.ts';
 import type { BinanceOrderflow } from '../orderflow/binanceOrderflow.ts';
 import type { LiquidationService } from '../liquidation/service.ts';
+import type { VolumeAggService } from '../volumeAgg/service.ts';
 import { cvdText, type BinanceOrderflowSnapshot } from '../orderflow/calc.ts';
 
 export interface StartInput {
@@ -77,6 +78,7 @@ export interface ServiceOptions {
   /** Không có → không có order flow Binance. */
   binanceOrderflow?: BinanceOrderflow;
   liquidation?: LiquidationService;
+  volumeAgg?: VolumeAggService;
 }
 
 /** Không có ngưỡng cho symbol → coi như không giới hạn (không cảnh báo lệch offset). */
@@ -288,6 +290,15 @@ export class AnalysisService {
     if (!liq?.has(sym)) throw new ServiceError(`Chưa bật thanh lý cho ${symbol}`, 404);
     if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
     return liq.live(sym, tfSeconds(tf), heatmapAsOf);
+  }
+
+  /** Volume gộp nhiều sàn (nến đã đóng) cho chart / agent. */
+  async volumeAggregate(symbol: string, tf: string, limit: number) {
+    const sym = normalizeSymbol(symbol);
+    const va = this.opts.volumeAgg;
+    if (!va?.has(sym)) throw new ServiceError(`Chưa bật volume gộp cho ${symbol}`, 404);
+    if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
+    return va.get(sym, tf, limit);
   }
 
   /** Giá chart hiện tại (close nến 1m đang chạy); lỗi → null. */

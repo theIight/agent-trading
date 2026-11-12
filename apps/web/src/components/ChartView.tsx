@@ -7,6 +7,7 @@ import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 import { useOrderflowStore } from '../store/useOrderflowStore.ts';
 import { useLiquidationStore } from '../store/useLiquidationStore.ts';
+import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
 
 function fmt(n: number): string {
@@ -41,6 +42,11 @@ export function ChartView({ onStatus, onReady }: Props) {
   const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols, liquidationSymbols } = useAnalysisStore();
   const { data: liq, error: liqError, showBubbles, showHeatmap, watch: watchLiquidation } = useLiquidationStore();
   const liqSymbol = liquidationSymbols.includes(symbol) ? symbol : null;
+  const volumeAggSymbols = useAnalysisStore(s => s.volumeAggSymbols);
+  const { enabled: volAggOn, data: volAgg, error: volAggError, sync: syncVolAgg } = useVolumeAggStore();
+  const volAggSymbol = volumeAggSymbols.includes(symbol) ? symbol : null;
+  /** Số nến + mốc nến cuối trên chart: đổi khi có nến mới / tải thêm lịch sử → tải lại volume gộp. */
+  const [bars, setBars] = useState<{ count: number; lastTime: number | null }>({ count: 0, lastTime: null });
   const { data: liveOf, error: liveOfError, watch: watchOrderflow } = useOrderflowStore();
   const liveOfSymbol = orderflowSymbols.includes(symbol) ? symbol : null;
 
@@ -53,6 +59,11 @@ export function ChartView({ onStatus, onReady }: Props) {
       onError: setError,
       onInstrument: setInstrument,
       onDataChange: candles => {
+        setBars(prev =>
+          prev.count === candles.length && prev.lastTime === (candles.at(-1)?.time ?? null)
+            ? prev
+            : { count: candles.length, lastTime: candles.at(-1)?.time ?? null },
+        );
         if (DEMO_MODE) {
           const key = `${ctrl.getSymbol()}:${ctrl.getTimeframe()}`;
           if (key !== demoKey && candles.length) {
@@ -103,6 +114,16 @@ export function ChartView({ onStatus, onReady }: Props) {
     overlayRef.current?.setLiveOrderflow(liveOf ? { symbol: liveOf.symbol, levels: liveOf.levels, wallSegments: liveOf.wallSegments } : null);
   }, [liveOf]);
 
+  // Volume gộp (BTC, nến đã đóng): tải khi bật toggle, khi đổi symbol/khung và khi có nến mới đóng.
+  useEffect(() => {
+    syncVolAgg(volAggSymbol, tf, Math.min(bars.count, 1000), bars.lastTime);
+  }, [volAggSymbol, tf, bars, volAggOn, syncVolAgg]);
+
+  useEffect(() => {
+    const ok = volAggOn && volAgg && volAgg.symbol === symbol && volAgg.tf === tf;
+    controllerRef.current?.setVolumeAggregate(ok ? volAgg : null);
+  }, [volAggOn, volAgg, symbol, tf]);
+
   // Thanh lý (BTC): poll theo symbol + khung đang xem.
   useEffect(() => {
     watchLiquidation(liqSymbol, tf);
@@ -138,6 +159,14 @@ export function ChartView({ onStatus, onReady }: Props) {
               </b>
             )}{' '}
             Vol <b>{fmtVol(c.volume)}</b>
+            {legend.volAgg && (
+              <span className="vol-agg-legend">
+                {' '}
+                · Perp 3 sàn <b>{fmtVol(legend.volAgg.perp)}</b>
+                {!legend.volAgg.perpComplete && <span className="muted"> (thiếu sàn)</span>} · <span className="vol-spot">Spot</span>{' '}
+                <b>{legend.volAgg.spot === null ? '—' : fmtVol(legend.volAgg.spot)}</b>
+              </span>
+            )}
           </span>
         )}
       </div>
@@ -155,6 +184,11 @@ export function ChartView({ onStatus, onReady }: Props) {
       {liqSymbol && (showBubbles || showHeatmap) && (liqError || (liq && liq.notes.length > 0)) && (
         <div className={`of-chart-status liq-chart-status ${liqError ? 'down' : 'muted'}`}>
           Thanh lý: {liqError ? `lỗi tải (${liqError})` : liq!.notes.join(' · ')}
+        </div>
+      )}
+      {volAggSymbol && volAggOn && (volAggError || (volAgg && volAgg.notes.length > 0)) && (
+        <div className={`of-chart-status volagg-chart-status ${volAggError ? 'down' : 'muted'}`}>
+          Volume gộp: {volAggError ? `lỗi tải (${volAggError})` : volAgg!.notes.join(' · ')}
         </div>
       )}
       {error && <div className="chart-error">Lỗi tải dữ liệu: {error}</div>}

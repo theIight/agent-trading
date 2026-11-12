@@ -59,6 +59,15 @@ const MIGRATIONS: string[] = [
      oi REAL NOT NULL,
      PRIMARY KEY (symbol, t)
    ) WITHOUT ROWID;`,
+  // Volume nến đã đóng từng sàn (volume gộp).
+  `CREATE TABLE IF NOT EXISTS venue_volume (
+     symbol TEXT NOT NULL,
+     venue TEXT NOT NULL,
+     tf TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     volume REAL NOT NULL,
+     PRIMARY KEY (symbol, venue, tf, t)
+   ) WITHOUT ROWID;`,
 ];
 
 export function openDb(dbPath: string): Db {

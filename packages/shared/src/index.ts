@@ -8,3 +8,4 @@ export * from './submissionExample.ts';
 export * from './instruments.ts';
 export * from './bookmap.ts';
 export * from './liquidation.ts';
+export * from './volumeAgg.ts';

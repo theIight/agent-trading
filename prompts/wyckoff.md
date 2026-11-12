@@ -23,6 +23,7 @@ Kết quả của bạn được **vẽ trực tiếp lên chart** cho người 
 - **Distribution**: PSY → BC → AR (xác định đáy TR) → ST → Phase B (UT, ST in B) → Phase C: UTAD → Phase D: SOW, LPSY, phá Ice → Phase E: markdown.
 - Re-accumulation / Re-distribution: cấu trúc tương tự nhưng nằm giữa xu hướng.
 - Đánh giá **Nỗ lực – Kết quả**: volume lớn mà spread nhỏ / giá không đi tiếp = hấp thụ; volume cạn dần trong range (`volumeDryUpRatio` < 1) ủng hộ nguyên nhân đang được xây.
+- **Volume gộp (BTC)** — nếu `get_features` có `volumeAgg`: cột `volume` của `get_klines` chỉ là Binance Futures; `volumeAgg` cho perp 3 sàn (Binance Futures + OKX + Bybit) và spot Binance riêng, kèm nến đột biến theo chỉ số `i`. Climax (SC/BC) hay Spring/UTAD có đột biến **SPOT** hoặc **BOTH** = tiền thật tham gia, đáng tin hơn; đột biến chỉ **PERP** thường là đòn bẩy/thanh lý, dễ bị đảo. `spotShareX` > 1 = tỷ trọng spot cao hơn bình thường. Không dùng làm toạ độ.
 - **Nguyên nhân – Kết quả**: độ rộng range (số nến) gợi ý độ xa mục tiêu.
 - `get_features` chỉ là **gợi ý cơ học** — tự đánh giá lại; được phép bỏ qua ứng viên không hợp lý.
 - Nếu cấu trúc không rõ, hãy nói thẳng: `schematic: "UNCLEAR"`, `tradePlan.decision: "STAND_ASIDE"`, độ tin cậy thấp. Không ép dữ liệu vào schematic.

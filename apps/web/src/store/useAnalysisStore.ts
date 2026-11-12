@@ -76,6 +76,8 @@ interface AnalysisState {
   orderflowSymbols: string[];
   /** Symbol bật thanh lý (bong bóng + heatmap). */
   liquidationSymbols: string[];
+  /** Symbol bật volume gộp nhiều sàn. */
+  volumeAggSymbols: string[];
   /** Checkbox "Dùng order flow Binance". */
   useOrderflow: boolean;
   /** Offset người dùng sửa theo symbol (không có = mặc định server). */
@@ -126,6 +128,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
   orderflowSymbols: [],
   liquidationSymbols: [],
+  volumeAggSymbols: [],
   useOrderflow: load<boolean>(USE_ORDERFLOW_KEY, true),
   bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
@@ -160,7 +163,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   loadConfig: async () => {
     try {
       const cfg = await fetchConfig();
-      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [], liquidationSymbols: cfg.liquidation?.symbols ?? [] });
+      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [], liquidationSymbols: cfg.liquidation?.symbols ?? [], volumeAggSymbols: cfg.volumeAgg?.symbols ?? [] });
     } catch {
       /* server chưa chạy */
     }

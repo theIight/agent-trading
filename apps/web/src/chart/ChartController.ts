@@ -5,6 +5,8 @@ import {
   HistogramSeries,
   TickMarkType,
   createChart,
+  createSeriesMarkers,
+  type ISeriesMarkersPluginApi,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
@@ -13,7 +15,7 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import type { Candle, Timeframe } from '@wca/shared';
+import type { Candle, Timeframe, VolumeAggBar, VolumeSpike } from '@wca/shared';
 import type { InstrumentInfo } from '@wca/shared';
 import { fetchInstrument, fetchKlines } from '../api/client.ts';
 import { subscribeLiveKlines, subscribeServerLive } from './liveFeed.ts';
@@ -28,7 +30,14 @@ const LOAD_MORE_THRESHOLD = 30;
 export interface LegendData {
   candle: Candle | null;
   change: number | null;
+  /** Volume gộp của nến (chỉ nến đã đóng, khi bật "Volume gộp"). */
+  volAgg?: VolumeAggBar;
 }
+
+/** Màu phần spot trong cột volume gộp. */
+export const SPOT_VOLUME_COLOR = 'rgba(255,152,0,0.8)';
+const SPIKE_COLORS: Record<VolumeSpike['kind'], string> = { BOTH: '#ff6d00', SPOT: '#ff9800', PERP: '#9598a1' };
+const SPIKE_TEXT: Record<VolumeSpike['kind'], string> = { BOTH: 'S+P', SPOT: 'S', PERP: 'P' };
 
 export interface ChartListeners {
   onLegend?: (data: LegendData) => void;
@@ -69,6 +78,11 @@ export class ChartController {
   readonly chart: IChartApi;
   readonly candleSeries: ISeriesApi<'Candlestick'>;
   readonly volumeSeries: ISeriesApi<'Histogram'>;
+  /** Volume gộp: cột perp + spot (vẽ sau cột perp), chỉ nến đã đóng. */
+  private readonly spotVolumeSeries: ISeriesApi<'Histogram'>;
+  private readonly spikeMarkers: ISeriesMarkersPluginApi<Time>;
+  private volAgg: Map<number, VolumeAggBar> | null = null;
+  private volSpikes: VolumeSpike[] = [];
   private candles: Candle[] = [];
   private symbol = '';
   private tf: Timeframe = '4h';
@@ -89,6 +103,15 @@ export class ChartController {
       rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 } },
     });
     this.candleSeries = this.chart.addSeries(CandlestickSeries, { borderVisible: false });
+    // Thêm trước cột perp để nằm phía sau (cột spot = perp + spot, phần nhô lên là spot).
+    this.spotVolumeSeries = this.chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      color: SPOT_VOLUME_COLOR,
+    });
+    this.spikeMarkers = createSeriesMarkers(this.spotVolumeSeries, []);
     this.volumeSeries = this.chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -148,13 +171,52 @@ export class ChartController {
       wickUpColor: t.up,
       wickDownColor: t.down,
     });
-    if (this.candles.length) this.volumeSeries.setData(this.candles.map(c => this.toVolume(c)));
+    if (this.candles.length) this.refreshVolume();
+  }
+
+  /** Volume gộp (nến đã đóng) + đột biến; null = về volume Binance Futures như cũ. */
+  setVolumeAggregate(data: { bars: readonly VolumeAggBar[]; spikes: readonly VolumeSpike[] } | null): void {
+    this.volAgg = data ? new Map(data.bars.map(b => [b.time, b])) : null;
+    this.volSpikes = data ? [...data.spikes] : [];
+    this.refreshVolume();
+  }
+
+  private refreshVolume(): void {
+    this.volumeSeries.setData(this.candles.map(c => this.toVolume(c)));
+    const agg = this.volAgg;
+    if (!agg) {
+      this.spotVolumeSeries.setData([]);
+      this.spikeMarkers.setMarkers([]);
+      return;
+    }
+    const spotData: HistogramData[] = [];
+    for (const c of this.candles) {
+      const a = agg.get(c.time);
+      if (a && a.spot !== null) spotData.push({ time: c.time as UTCTimestamp, value: a.perp + a.spot });
+    }
+    this.spotVolumeSeries.setData(spotData);
+    const have = new Set(spotData.map(d => d.time as number));
+    this.spikeMarkers.setMarkers(
+      this.volSpikes
+        .filter(sp => have.has(sp.time))
+        .map(sp => ({
+          time: sp.time as UTCTimestamp,
+          position: 'aboveBar' as const,
+          shape: 'circle' as const,
+          size: sp.kind === 'BOTH' ? 1 : 0.6,
+          color: SPIKE_COLORS[sp.kind],
+          text: SPIKE_TEXT[sp.kind],
+        })),
+    );
   }
 
   /** Tải dữ liệu cho symbol/khung mới và kết nối realtime. */
   async load(symbol: string, tf: Timeframe): Promise<void> {
     const token = ++this.loadToken;
     const symbolChanged = symbol !== this.symbol;
+    // Volume gộp thuộc symbol/khung cũ (mốc thời gian có thể trùng, vd 1h và 4h) → bỏ, chờ bản mới.
+    this.volAgg = null;
+    this.volSpikes = [];
     this.symbol = symbol;
     this.tf = tf;
     this.noMoreHistory = false;
@@ -288,7 +350,7 @@ export class ChartController {
   private setAllData(): void {
     this.applyPriceFormat();
     this.candleSeries.setData(this.candles.map(c => this.toCandle(c)));
-    this.volumeSeries.setData(this.candles.map(c => this.toVolume(c)));
+    this.refreshVolume();
     this.listeners.onDataChange?.(this.candles);
   }
 
@@ -308,7 +370,8 @@ export class ChartController {
   private emitLegend(candle: Candle | null, idx = this.candles.length - 1): void {
     const prev = idx > 0 ? this.candles[idx - 1] : undefined;
     const change = candle && prev ? ((candle.close - prev.close) / prev.close) * 100 : null;
-    this.listeners.onLegend?.({ candle, change });
+    const volAgg = candle ? this.volAgg?.get(candle.time) : undefined;
+    this.listeners.onLegend?.({ candle, change, ...(volAgg ? { volAgg } : {}) });
   }
 
   private toCandle(c: Candle): CandlestickData {
@@ -317,6 +380,10 @@ export class ChartController {
 
   private toVolume(c: Candle): HistogramData {
     const t = THEMES[this.theme];
-    return { time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? t.upVolume : t.downVolume };
+    // Bật volume gộp: nến đã đóng dùng tổng perp 3 sàn; nến đang chạy giữ volume Binance Futures.
+    const agg = this.volAgg?.get(c.time);
+    const up = c.close >= c.open;
+    if (agg) return { time: c.time as UTCTimestamp, value: agg.perp, color: up ? t.upVolumeSolid : t.downVolumeSolid };
+    return { time: c.time as UTCTimestamp, value: c.volume, color: up ? t.upVolume : t.downVolume };
   }
 }

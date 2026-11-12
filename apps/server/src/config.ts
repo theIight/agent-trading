@@ -157,6 +157,10 @@ export const config = {
   /** Ký quỹ duy trì giả định. */
   liqMmr: Number(process.env.LIQ_MMR) > 0 ? Number(process.env.LIQ_MMR) : 0.004,
   liqRetainH: int('LIQ_RETAIN_H', 72),
+  /** Volume gộp (nến đã đóng): perp Binance Futures + OKX + Bybit, spot Binance. Rỗng = tắt. */
+  volAggSymbols: (process.env.VOLAGG_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Đột biến khi volume nhóm > hệ số này × trung vị 20 nến trước. */
+  volAggSpikeX: Number(process.env.VOLAGG_SPIKE_X) > 1 ? Number(process.env.VOLAGG_SPIKE_X) : 3,
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

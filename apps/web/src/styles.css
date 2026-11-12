@@ -151,6 +151,8 @@ button, input { font: inherit; color: inherit; }
 }
 .of-chart-status.down { color: var(--down); }
 .liq-chart-status { top: 74px; }
+.volagg-chart-status { top: 90px; }
+.vol-spot { color: #ff9800; }
 
 /* ---------- Panel phân tích ---------- */
 .panel {
