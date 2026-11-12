@@ -50,8 +50,8 @@ export const ORDERFLOW_KIND_LABELS: Record<OrderflowLevelKind, string> = {
   ASK_WALL: 'Tường bán',
   BID_WALL: 'Tường mua',
   POC: 'POC',
-  HVN: 'HVN',
-  LVN: 'LVN',
+  HVN: 'Vùng volume cao (HVN)',
+  LVN: 'Vùng volume thấp (LVN)',
   ABSORPTION: 'Hấp thụ',
   AGGRESSION: 'Lệnh lớn',
 };

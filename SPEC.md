@@ -58,7 +58,7 @@
 
 ### 3.2 Order flow (Bookmap)
 
-* Chỉ symbol trong `BOOKMAP_SYMBOLS` (mặc định `XAUUSD,BTCUSDT`). Ảnh `htf` = khung lớn (zoom rộng), `ltf` = khung bé.
+* Ảnh đọc từ đường dẫn cấu hình ở server `BOOKMAP_IMAGE_<SYMBOL>_<HTF|LTF>` (hỗ trợ `~`, chỉ .png/.jpg, ≤ 10 MB); client không gửi ảnh hay đường dẫn. Symbol có ít nhất một path mới dùng được. Ảnh `htf` = khung lớn (zoom rộng), `ltf` = khung bé.
 * `orderflow = {lastPrices[≤2]{image, bookmapPrice}, summary, levels[≤12], cvd, offset?, measuredOffset?}`.
 * `levels[] = {kind ∈ ASK_WALL/BID_WALL/POC/HVN/LVN/ABSORPTION/AGGRESSION, image ∈ htf/ltf, bookmapPrice, price?, size?, sizeSource? ∈ COB/SVP/BUBBLE, strength, note}`. Agent ghi `bookmapPrice` đúng như trên trục Bookmap; `size` chỉ khi có số in trên ảnh.
 * **Server điền** `price = bookmapPrice − offset`, `offset`, `measuredOffset` (giá agent tự quy đổi bị ghi đè). Vàng: Bookmap chạy GC futures COMEX, cao hơn XAUUSD spot (basis).
@@ -97,7 +97,8 @@ Tự sửa + ghi `warnings`:
 ## 5. Điều phối phân tích (`apps/server/src/analysis`)
 
 * `POST /api/analyses {symbol, primaryTf, contextTfs[], screenshot?, runner?, model?}` → bản ghi `RUNNING` (lưu `runner`, `model`), đưa vào hàng đợi; **chạy tuần tự 1 job/lần** cho mọi agent. `runner` ∈ `AGENT_RUNNERS` (mặc định `AGENT_RUNNER`), không bật / binary không chạy được → 400. `model` khớp `^[\w.:/-]{1,80}$`, rỗng = mặc định của runner. `screenshot` là data URL PNG, lưu `data/screenshots/<id>.png`.
-* `bookmap? {htf?, ltf?, capturedAt?, offset?}` (data URL PNG/JPEG, ≥ 1 ảnh): symbol ngoài `BOOKMAP_SYMBOLS`, runner `supportsBookmap = false`, thiếu ảnh hoặc sai định dạng → 400. `capturedAt` (unix giây, UI lấy `File.lastModified` của ảnh cũ nhất; thiếu/tương lai → lúc gửi). `offset` thiếu → `BOOKMAP_OFFSET_<SYMBOL>` (XAUUSD 10, BTCUSDT 0). Lưu `data/screenshots/<id>-bookmap-{htf,ltf}.{png,jpg}` + `<id>-bookmap.json` (meta). Bản ghi có `bookmap: true` (cột `analyses.bookmap`).
+* `bookmap? {offset?}`: symbol chưa cấu hình ảnh hoặc runner `supportsBookmap = false` → 400. `offset` thiếu → `BOOKMAP_OFFSET_<SYMBOL>` (XAUUSD 10, BTCUSDT 0). **Khi job bắt đầu chạy** (không phải lúc gửi, để có ảnh mới nhất nếu phải chờ hàng đợi) server copy các file cấu hình vào `data/screenshots/<id>-bookmap-{htf,ltf}.{png,jpg}` + `<id>-bookmap.json` (meta: `capturedAt` = mtime cũ nhất, `submittedAt` = lúc copy). Không đọc được file nào → job FAILED "Không đọc được ảnh Bookmap: …"; một file lỗi → bỏ qua kèm bước cảnh báo. Bản ghi có `bookmap: true` (cột `analyses.bookmap`).
+* `GET /api/bookmap/:symbol` → `{now, images[{role, available, mtime?, size?, error?}]}`; `GET /api/bookmap/:symbol/:role` → ảnh hiện tại (`no-store`). Symbol chưa cấu hình → 404. `/api/config.bookmap = {symbols (có path), offsets}`.
 * Trạng thái: `RUNNING → DONE | FAILED | CANCELED`. Agent thoát mà chưa nộp hợp lệ → `FAILED`. Server khởi động lại → mọi `RUNNING` cũ thành `FAILED`.
 * `POST /api/analyses/:id/cancel` hủy job đang chạy (SIGTERM, sau 3s SIGKILL) hoặc đang chờ.
 * SSE: `/api/analyses/:id/stream` (step/text/status/result của 1 phân tích), `/api/events` (status/result mọi phân tích). Heartbeat 15s.
@@ -165,9 +166,9 @@ API nội bộ `/internal/*`: chỉ localhost + header `x-wca-token` = nội dun
 | Dự đoán | Đường nét đứt tới tương lai; kịch bản xác suất cao nhất nét đậm; nhãn `tên xx%` |
 | Setup | Công cụ Long/Short cho từng setup: giữa vùng entry→TP xa nhất (xanh), →SL (đỏ), vùng entry (vàng, nếu là vùng), TP trung gian nét đứt, SL tinh chỉnh (nếu có) là đường đứt đỏ "SL 1m ≈" tại giữa vùng ∓ `estStopDistance`; từ `asOf` tới `validUntil` hoặc 25 nến, tối thiểu 12 nến khung đang xem. Nhiều setup → các cột cạnh nhau (setup chính bên trái, cách 1 nến) để không chồng; nhãn overlay tự giãn dọc để không đè nhau. Setup `MARKET` của quyết định `ENTER` vẽ nét liền; setup đang chờ vẽ mờ, viền nét đứt, nhãn `Chờ hồi/Chờ phá vỡ <trigger>`. `STAND_ASIDE` không vẽ, trừ khi bật "Hiện setup tham khảo". Click thẻ setup ở panel → chỉ vẽ setup đó. Bản ghi cũ vẽ từ `action` |
 
-| Order flow | Price line nét chấm tím tại `price` đã quy đổi, nhãn `BM <loại> · <size> <đơn vị>` (vàng: lot, BTC: BTC); độ dày 1–3 theo `size` tương đối trong cùng ảnh + cùng `sizeSource`. Toggle "Order flow" chỉ hiện khi kết quả có `orderflow` |
+| Order flow | Primitive (sau nến): vạch nét chấm ngang toàn chart, độ đậm 30%, **không** có nhãn trên trục giá; nhãn 10px sát mép phải chỉ là con số `size`. Đỏ = tường bán, xanh = tường mua, tím = POC (nhãn `POC`, trùng giá chỉ 1 vạch). Chỉ vẽ tường có `size` ≥ 40% tường lớn nhất cùng ảnh, tối đa 3 tường mỗi phía; tường không có `size`, HVN/LVN/ABSORPTION/AGGRESSION chỉ ở panel. Toggle "Order flow" chỉ hiện khi kết quả có `orderflow` |
 
-* Panel phân tích: với symbol trong `BOOKMAP_SYMBOLS` có checkbox **"Dùng ảnh Bookmap"** (mặc định tắt, nhớ trong localStorage). Bật → 2 ô ảnh (khung lớn / khung bé: chọn file, kéo thả, dán), ô offset (mặc định từ `/api/config.bookmap.offsets`, sửa được, nhớ theo symbol). Tắt → không gửi `bookmap`. Bật mà chưa có ảnh → chặn Analyze. Ảnh giữ trong phiên theo symbol. Runner không hỗ trợ → checkbox bị khoá.
-* Kết quả có mục "Order flow (Bookmap)" (summary, CVD, các mức, offset dùng / đo được); lịch sử hiện nhãn `BM`.
+* Panel phân tích: với symbol có cấu hình ảnh có checkbox **"Dùng ảnh Bookmap"** (mặc định tắt, nhớ trong localStorage). Bật → ảnh xem trước từ `/api/bookmap/:symbol/:role` (làm mới 10s, nút "Làm mới ảnh", bấm ảnh để mở lớn), tuổi ảnh "Cập nhật x giây trước", > 30 phút tô đỏ "Ảnh cũ — Bookmap có đang chạy?", file lỗi hiện lỗi trong ô; ô offset (mặc định từ `/api/config.bookmap.offsets`, sửa được, nhớ theo symbol). Tắt → không gửi `bookmap`. Runner không hỗ trợ → checkbox bị khoá.
+* Kết quả có mục "Order flow (Bookmap)" (chú thích màu, summary, CVD, các mức — HVN/LVN hiển thị "Vùng volume cao/thấp" —, offset dùng / đo được); lịch sử hiện nhãn `BM`.
 * Mặc định ẩn mục của khung **nhỏ hơn** khung đang xem; mục của khung lớn hơn được snap về nến chứa nó.
 * `rightOffset` của time scale tự mở rộng để thấy hết phần tương lai.

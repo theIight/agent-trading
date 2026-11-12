@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { sortTopDown, type AnalysisRecord, type BookmapImageRole, type BookmapUiConfig, type AnalysisResult, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
+import { sortTopDown, type AnalysisRecord, type BookmapUiConfig, type AnalysisResult, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
 import { cancelAnalysis, fetchAnalysis, fetchConfig, fetchHistory, fetchRunners, startAnalysis, subscribeSse } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import { ALL_LAYERS_ON, type LayerKey, type LayerVisibility } from '../overlays/model.ts';
@@ -24,28 +24,6 @@ const RUNNER_KEY = 'wca:runner';
 const MODELS_KEY = 'wca:runnerModels';
 const USE_BOOKMAP_KEY = 'wca:useBookmap';
 const BOOKMAP_OFFSETS_KEY = 'wca:bookmapOffsets';
-
-/** Ảnh Bookmap đã chọn (giữ trong phiên, theo symbol). */
-export interface BookmapImage {
-  dataUrl: string;
-  name: string;
-  /** ms — File.lastModified (ảnh dán từ clipboard: lúc dán). */
-  lastModified: number;
-}
-
-/** Ảnh Bookmap → data URL. */
-export function readImageFile(file: File): Promise<BookmapImage> {
-  return new Promise((resolve, reject) => {
-    if (!/^image\/(png|jpeg)$/.test(file.type)) {
-      reject(new Error('Ảnh Bookmap phải là PNG hoặc JPEG'));
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => resolve({ dataUrl: String(reader.result), name: file.name || 'clipboard.png', lastModified: file.lastModified || Date.now() });
-    reader.onerror = () => reject(reader.error ?? new Error('Không đọc được ảnh'));
-    reader.readAsDataURL(file);
-  });
-}
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -92,7 +70,6 @@ interface AnalysisState {
   bookmapConfig: BookmapUiConfig | null;
   /** Checkbox "Dùng ảnh Bookmap". */
   useBookmap: boolean;
-  bookmapImages: Record<string, Partial<Record<BookmapImageRole, BookmapImage>>>;
   /** Offset người dùng sửa theo symbol (không có = mặc định server). */
   bookmapOffsets: Record<string, number>;
   /** Agent khả dụng (từ server). */
@@ -112,7 +89,6 @@ interface AnalysisState {
   setAttachScreenshot: (v: boolean) => void;
   loadConfig: () => Promise<void>;
   setUseBookmap: (v: boolean) => void;
-  setBookmapImage: (symbol: string, role: BookmapImageRole, img: BookmapImage | null) => void;
   setBookmapOffset: (symbol: string, offset: number | null) => void;
   loadRunners: () => Promise<void>;
   setRunner: (r: RunnerId) => void;
@@ -139,7 +115,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   attachScreenshot: false,
   bookmapConfig: null,
   useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
-  bookmapImages: {},
   bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
   runner: load<RunnerId | null>(RUNNER_KEY, null),
@@ -178,13 +153,6 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setUseBookmap: useBookmap => {
     set({ useBookmap });
     save(USE_BOOKMAP_KEY, useBookmap);
-  },
-
-  setBookmapImage: (symbol, role, img) => {
-    const cur = { ...get().bookmapImages[symbol] };
-    if (img) cur[role] = img;
-    else delete cur[role];
-    set({ bookmapImages: { ...get().bookmapImages, [symbol]: cur } });
   },
 
   setBookmapOffset: (symbol, offset) => {
@@ -248,22 +216,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const info = runners.find(r => r.id === runner);
       const screenshot = get().attachScreenshot && (info?.supportsScreenshot ?? true) ? chartRegistry.screenshot() : undefined;
       const model = runner ? runnerModels[runner] || undefined : undefined;
-      let bookmap: Parameters<typeof startAnalysis>[0]['bookmap'];
-      if (bookmapEnabled(get(), symbol, info)) {
-        const imgs = get().bookmapImages[symbol] ?? {};
-        const list = Object.values(imgs);
-        if (!list.length) {
-          set({ lastError: 'Chưa chọn ảnh Bookmap (hoặc bỏ tick "Dùng ảnh Bookmap")' });
-          return;
-        }
-        bookmap = {
-          htf: imgs.htf?.dataUrl,
-          ltf: imgs.ltf?.dataUrl,
-          // Ảnh cũ nhất quyết định thời điểm chụp (thận trọng khi kiểm tra ảnh cũ).
-          capturedAt: Math.floor(Math.min(...list.map(i => i.lastModified)) / 1000),
-          offset: bookmapOffsetOf(get(), symbol),
-        };
-      }
+      // Ảnh Bookmap do server đọc từ đường dẫn cấu hình, lúc job bắt đầu chạy.
+      const bookmap = bookmapEnabled(get(), symbol, info) ? { offset: bookmapOffsetOf(get(), symbol) } : undefined;
       const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model, bookmap });
       const order = sortTopDown(rec.tfs as Timeframe[]).join(' → ');
       const who = `${info?.label ?? rec.runner ?? 'agent'} · ${model ?? info?.defaultModel ?? 'model mặc định'}`;

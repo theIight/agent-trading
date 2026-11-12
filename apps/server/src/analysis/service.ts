@@ -23,6 +23,7 @@ import {
 } from '@wca/shared';
 import type { KlineService } from '../market/klineService.ts';
 import type { AgentRunner } from '../runner/types.ts';
+import { imageStatus, inspectImage, type BookmapImageFile, type BookmapImageStatus } from './bookmapSource.ts';
 import { referencedTfs, validateSubmission } from '../validate/index.ts';
 import type { AnalysisRepo } from './repo.ts';
 
@@ -35,23 +36,18 @@ export interface StartInput {
   /** Agent chạy phân tích (mặc định: `defaultRunner`). */
   runner?: unknown;
   model?: string;
-  /** Ảnh Bookmap (order flow), chỉ cho symbol trong `bookmap.symbols`. */
+  /** Dùng ảnh Bookmap (đọc từ đường dẫn cấu hình ở server), chỉ cho symbol có cấu hình. */
   bookmap?: BookmapInput;
 }
 
 export interface BookmapInput {
-  /** data URL PNG/JPEG ảnh khung lớn. */
-  htf?: string;
-  /** data URL PNG/JPEG ảnh khung bé. */
-  ltf?: string;
-  /** Unix giây lúc chụp; thiếu → lúc gửi. */
-  capturedAt?: number;
   /** Giá Bookmap − giá app; thiếu → mặc định theo symbol. */
   offset?: number;
 }
 
 export interface BookmapOptions {
-  symbols: string[];
+  /** Đường dẫn ảnh theo symbol / khung (đã mở rộng `~`). */
+  images: Record<string, Partial<Record<BookmapImageRole, string>>>;
   offsets: Record<string, number>;
   tolerances: Record<string, number>;
   maxAgeMin: number;
@@ -77,6 +73,12 @@ export interface ServiceOptions {
 const NO_TOLERANCE = 1e12;
 const BOOKMAP_EXT = { png: 'png', jpeg: 'jpg' } as const;
 
+interface PendingBookmap {
+  offset: number;
+  tolerance: number;
+  instrument: string;
+}
+
 export type SubmitOutcome =
   | { ok: true; analysisId: string; warnings: string[] }
   | { ok: false; errors: string[] };
@@ -85,6 +87,8 @@ interface Job {
   id: string;
   runner: RunnerId;
   req: { symbol: string; primaryTf: Timeframe; plan: TfPlanEntry[]; hasScreenshot: boolean; hasBookmap: boolean; model?: string };
+  /** Ảnh Bookmap được copy khi job bắt đầu chạy (ảnh mới nhất dù phải chờ hàng đợi). */
+  bookmap?: PendingBookmap;
 }
 
 export class ServiceError extends Error {
@@ -179,10 +183,6 @@ export class AnalysisService {
       fs.writeFileSync(this.screenshotPath(id), Buffer.from(m[1]!, 'base64'));
       hasScreenshot = true;
     }
-    if (bookmap) {
-      for (const f of bookmap.files) fs.writeFileSync(this.bookmapImagePath(id, f.role, f.ext), f.buf);
-      fs.writeFileSync(this.bookmapMetaPath(id), JSON.stringify(bookmap.meta));
-    }
 
     const rec: AnalysisRecord = {
       id,
@@ -200,39 +200,74 @@ export class AnalysisService {
       id,
       runner: runnerId,
       req: { symbol, primaryTf, plan: planRes.plan, hasScreenshot: hasScreenshot && runner.supportsScreenshot, hasBookmap: Boolean(bookmap), model },
+      ...(bookmap ? { bookmap } : {}),
     });
     if (this.current) this.emitStep(id, `Đang chờ: còn ${this.queue.length} phân tích phía trước`);
     void this.pump();
     return rec;
   }
 
-  private prepareBookmap(symbol: string, input: BookmapInput, runner: AgentRunner) {
+  /** Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap. */
+  get bookmapSymbols(): string[] {
+    return Object.entries(this.opts.bookmap?.images ?? {})
+      .filter(([, roles]) => Object.values(roles).some(Boolean))
+      .map(([sym]) => sym);
+  }
+
+  /** Trạng thái file ảnh Bookmap của symbol (cho panel xem trước). */
+  bookmapStatus(symbol: string): BookmapImageStatus[] {
+    const paths = this.opts.bookmap?.images[normalizeSymbol(symbol)];
+    if (!paths) throw new ServiceError(`Chưa cấu hình ảnh Bookmap cho ${symbol}`, 404);
+    return BOOKMAP_IMAGE_ROLES.filter(role => paths[role]).map(role => imageStatus(role, paths[role]));
+  }
+
+  /** File ảnh Bookmap hiện tại (cho ảnh xem trước). */
+  bookmapPreview(symbol: string, role: string): BookmapImageFile {
+    const paths = this.opts.bookmap?.images[normalizeSymbol(symbol)];
+    const file = (BOOKMAP_IMAGE_ROLES as readonly string[]).includes(role) ? paths?.[role as BookmapImageRole] : undefined;
+    if (!file) throw new ServiceError('Chưa cấu hình ảnh Bookmap này', 404);
+    const r = inspectImage(file);
+    if ('error' in r) throw new ServiceError(r.error, 404);
+    return r;
+  }
+
+  private prepareBookmap(symbol: string, input: BookmapInput, runner: AgentRunner): PendingBookmap {
     const cfg = this.opts.bookmap;
-    if (!cfg || !cfg.symbols.includes(symbol)) {
-      throw new ServiceError(`Ảnh Bookmap chỉ hỗ trợ ${cfg?.symbols.join(', ') || '(chưa bật)'}, không hỗ trợ ${symbol}`);
+    if (!cfg || !this.bookmapSymbols.includes(symbol)) {
+      throw new ServiceError(`Chưa cấu hình ảnh Bookmap cho ${symbol} (BOOKMAP_IMAGE_${symbol}_HTF / _LTF)`);
     }
     if (!runner.supportsBookmap) throw new ServiceError(`${runner.label} không nhận được ảnh Bookmap`);
-    const files: { role: BookmapImageRole; ext: string; buf: Buffer }[] = [];
-    for (const role of BOOKMAP_IMAGE_ROLES) {
-      const url = input[role];
-      if (!url) continue;
-      const m = /^data:image\/(png|jpeg);base64,(.+)$/.exec(url);
-      if (!m) throw new ServiceError(`Ảnh Bookmap ${role} phải là data URL PNG hoặc JPEG`);
-      files.push({ role, ext: BOOKMAP_EXT[m[1] as 'png' | 'jpeg'], buf: Buffer.from(m[2]!, 'base64') });
-    }
-    if (!files.length) throw new ServiceError('Cần ít nhất 1 ảnh Bookmap (khung lớn hoặc khung bé)');
-    const now = Math.floor(Date.now() / 1000);
-    const capturedAt = Number.isInteger(input.capturedAt) && input.capturedAt! > 0 ? Math.min(input.capturedAt!, now) : now;
-    const offset = Number.isFinite(input.offset) ? input.offset! : (cfg.offsets[symbol] ?? 0);
-    const meta: BookmapMeta = {
-      images: files.map(f => f.role),
-      capturedAt,
-      submittedAt: now,
-      offset,
+    return {
+      offset: Number.isFinite(input.offset) ? input.offset! : (cfg.offsets[symbol] ?? 0),
       tolerance: cfg.tolerances[symbol] ?? NO_TOLERANCE,
       instrument: bookmapInstrumentLabel(symbol),
     };
-    return { files, meta };
+  }
+
+  /** Copy ảnh Bookmap tại thời điểm job bắt đầu; capturedAt = mtime cũ nhất. Lỗi → Error (job FAILED). */
+  private snapshotBookmap(id: string, symbol: string, pending: PendingBookmap): BookmapMeta {
+    const paths = this.opts.bookmap?.images[symbol] ?? {};
+    const images: BookmapImageRole[] = [];
+    const mtimes: number[] = [];
+    const errors: string[] = [];
+    for (const role of BOOKMAP_IMAGE_ROLES) {
+      const src = paths[role];
+      if (!src) continue;
+      const r = inspectImage(src);
+      if ('error' in r) {
+        errors.push(r.error);
+        continue;
+      }
+      fs.copyFileSync(src, this.bookmapImagePath(id, role, r.ext.slice(1)));
+      images.push(role);
+      mtimes.push(r.mtime);
+    }
+    if (!images.length) throw new Error(`Không đọc được ảnh Bookmap: ${errors.join('; ') || 'chưa cấu hình'}`);
+    const now = Math.floor(Date.now() / 1000);
+    const meta: BookmapMeta = { images, capturedAt: Math.min(now, ...mtimes), submittedAt: now, ...pending };
+    fs.writeFileSync(this.bookmapMetaPath(id), JSON.stringify(meta));
+    if (errors.length) this.emitStep(id, `Bỏ qua ảnh Bookmap lỗi: ${errors.join('; ')}`);
+    return meta;
   }
 
   private safeId(id: string): string {
@@ -316,6 +351,10 @@ export class AnalysisService {
     this.emit({ kind: 'status', analysisId: job.id, status: 'RUNNING', message: `Khởi chạy ${runner.label} · ${modelLabel}` });
     this.models.set(job.id, `${runner.id} · ${modelLabel}`);
     try {
+      if (job.bookmap) {
+        const meta = this.snapshotBookmap(job.id, job.req.symbol, job.bookmap);
+        this.emitStep(job.id, `Đã lấy ảnh Bookmap (${meta.images.join(', ')}), chụp lúc ${new Date(meta.capturedAt * 1000).toLocaleTimeString('vi-VN')}`);
+      }
       const outcome = await runner.run(
         { analysisId: job.id, ...job.req, barsPerTf: this.opts.barsPerTf, instrument: this.opts.instrumentOf?.(job.req.symbol) },
         {

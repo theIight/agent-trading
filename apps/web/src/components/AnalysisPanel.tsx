@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import {
-  BOOKMAP_IMAGE_ROLES,
   bookmapInstrumentLabel,
   bookmapSizeUnit,
   ORDERFLOW_KIND_LABELS,
@@ -15,11 +14,11 @@ import {
   type TradePlan,
   type TradeSetup,
 } from '@wca/shared';
+import { fetchBookmapStatus, type BookmapImageStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import {
   bookmapOffsetOf,
   bookmapSupported,
-  readImageFile,
   useAnalysisStore,
   type StepLog,
 } from '../store/useAnalysisStore.ts';
@@ -37,56 +36,85 @@ const biasClass = (b: string) => (b === 'BULLISH' ? 'up' : b === 'BEARISH' ? 'do
 
 const ROLE_LABEL: Record<BookmapImageRole, string> = { htf: 'Khung lớn', ltf: 'Khung bé' };
 
-/** Ô chọn ảnh Bookmap: bấm chọn file, kéo thả, hoặc dán (Cmd+V) khi ô đang focus. */
-function BookmapSlot({ symbol, role, disabled }: { symbol: string; role: BookmapImageRole; disabled: boolean }) {
-  const img = useAnalysisStore(s => s.bookmapImages[symbol]?.[role]);
-  const setBookmapImage = useAnalysisStore(s => s.setBookmapImage);
-  const [err, setErr] = useState<string | null>(null);
-  const take = (file: File | null | undefined) => {
-    if (!file) return;
-    readImageFile(file).then(
-      i => {
-        setErr(null);
-        setBookmapImage(symbol, role, i);
-      },
-      (e: Error) => setErr(e.message),
-    );
-  };
-  const id = `bm-${role}`;
+/** Ảnh cũ hơn số giây này → tô đỏ (Bookmap có thể đã dừng ghi). */
+const BOOKMAP_STALE_SEC = 30 * 60;
+const BOOKMAP_POLL_MS = 10_000;
+
+function fmtAge(sec: number): string {
+  if (sec < 60) return `${Math.max(0, Math.round(sec))} giây trước`;
+  if (sec < 3600) return `${Math.round(sec / 60)} phút trước`;
+  if (sec < 86400) return `${Math.round(sec / 3600)} giờ trước`;
+  return `${Math.round(sec / 86400)} ngày trước`;
+}
+
+/** Ảnh xem trước của một file Bookmap (đường dẫn cấu hình ở server) + tuổi ảnh. */
+function BookmapPreview({ symbol, st, now }: { symbol: string; st: BookmapImageStatus; now: number }) {
+  const age = st.mtime !== undefined ? now - st.mtime : undefined;
+  const stale = age !== undefined && age > BOOKMAP_STALE_SEC;
   return (
-    <div
-      className={`bm-slot ${img ? 'has' : ''}`}
-      tabIndex={0}
-      onPaste={e => take([...e.clipboardData.files][0])}
-      onDragOver={e => e.preventDefault()}
-      onDrop={e => {
-        e.preventDefault();
-        take(e.dataTransfer.files[0]);
-      }}
-    >
+    <div className={`bm-slot ${st.available ? 'has' : ''}`}>
       <div className="bm-slot-head">
-        <b>{ROLE_LABEL[role]}</b>
-        {img && (
-          <button type="button" className="preset-x" disabled={disabled} onClick={() => setBookmapImage(symbol, role, null)} title="Bỏ ảnh">
-            ×
-          </button>
-        )}
+        <b>{ROLE_LABEL[st.role]}</b>
       </div>
-      {img ? (
+      {st.available ? (
         <>
-          <img src={img.dataUrl} alt={`Bookmap ${ROLE_LABEL[role]}`} />
-          <div className="muted bm-meta">
-            {img.name} · {new Date(img.lastModified).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' })}
+          <a href={`/api/bookmap/${symbol}/${st.role}?t=${st.mtime}`} target="_blank" rel="noreferrer" title="Mở ảnh lớn">
+            <img src={`/api/bookmap/${symbol}/${st.role}?t=${st.mtime}`} alt={`Bookmap ${ROLE_LABEL[st.role]}`} />
+          </a>
+          <div className={`bm-meta ${stale ? 'down' : 'muted'}`} title={stale ? 'Bookmap có đang chạy?' : undefined}>
+            {stale ? `Ảnh cũ (${fmtAge(age!)}) — Bookmap có đang chạy?` : `Cập nhật ${fmtAge(age!)}`}
           </div>
         </>
       ) : (
-        <label htmlFor={id} className="muted bm-empty">
-          Chọn / kéo thả / dán ảnh
-        </label>
+        <div className="down bm-meta bm-error" title={st.error}>
+          {st.error}
+        </div>
       )}
-      <input id={id} type="file" accept="image/png,image/jpeg" hidden disabled={disabled} onChange={e => take(e.target.files?.[0])} />
-      {err && <div className="down bm-meta">{err}</div>}
     </div>
+  );
+}
+
+/** Ảnh Bookmap hiện tại của symbol: làm mới định kỳ, tuổi ảnh tính theo giây. */
+function BookmapPreviews({ symbol }: { symbol: string }) {
+  const [images, setImages] = useState<BookmapImageStatus[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [skew, setSkew] = useState(0);
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  const [tick, setTick] = useState(0);
+  useEffect(() => {
+    let alive = true;
+    fetchBookmapStatus(symbol).then(
+      r => {
+        if (!alive) return;
+        setImages(r.images);
+        setErr(null);
+        setSkew(r.now - Date.now() / 1000); // lệch giờ client ↔ server
+      },
+      (e: Error) => alive && setErr(e.message),
+    );
+    const t = setTimeout(() => setTick(x => x + 1), BOOKMAP_POLL_MS);
+    return () => {
+      alive = false;
+      clearTimeout(t);
+    };
+  }, [symbol, tick]);
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now() / 1000), 1000);
+    return () => clearInterval(t);
+  }, []);
+  if (err) return <div className="down bm-meta">{err}</div>;
+  if (!images) return <div className="muted bm-meta">Đang đọc ảnh Bookmap…</div>;
+  return (
+    <>
+      <div className="bm-slots">
+        {images.map(st => (
+          <BookmapPreview key={st.role} symbol={symbol} st={st} now={now + skew} />
+        ))}
+      </div>
+      <button type="button" className="chip ghost bm-refresh" onClick={() => setTick(x => x + 1)}>
+        Làm mới ảnh
+      </button>
+    </>
   );
 }
 
@@ -108,11 +136,7 @@ function BookmapControls({ symbol, disabled }: { symbol: string; disabled: boole
       {useBookmap && !unsupported && (
         <>
           <div className="muted bm-meta">Bookmap: {bookmapInstrumentLabel(symbol)}</div>
-          <div className="bm-slots">
-            {BOOKMAP_IMAGE_ROLES.map(role => (
-              <BookmapSlot key={role} symbol={symbol} role={role} disabled={disabled} />
-            ))}
-          </div>
+          <BookmapPreviews symbol={symbol} />
           <label className="model-select">
             <span className="muted">Offset</span>
             <input
@@ -419,6 +443,10 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
   const drift = of.measuredOffset !== undefined && of.offset !== undefined ? of.measuredOffset - of.offset : undefined;
   return (
     <div className="orderflow">
+      <div className="of-legend muted">
+        <span className="of-ask">━ tường bán</span> <span className="of-bid">━ tường mua</span> <span className="of-poc">━ POC</span>
+        <span> · số trên chart = khối lượng</span>
+      </div>
       <p className="note">{of.summary}</p>
       {of.cvd && (
         <div className="note">

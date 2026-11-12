@@ -242,33 +242,49 @@ describe('buildOverlayModel', () => {
 });
 
 describe('layer Order flow (Bookmap)', () => {
+  const lv = (kind: string, image: 'htf' | 'ltf', price: number, size?: number, sizeSource?: 'COB' | 'SVP') =>
+    ({ kind, image, bookmapPrice: price + 10, price, size, sizeSource, strength: 0.5, note: '' }) as NonNullable<AnalysisResult['orderflow']>['levels'][number];
   const orderflow: AnalysisResult['orderflow'] = {
     lastPrices: [],
     summary: 'Hấp thụ ở đáy',
     cvd: '',
     offset: 10,
     levels: [
-      { kind: 'ASK_WALL', image: 'htf', bookmapPrice: 4078, price: 4068, size: 77, sizeSource: 'COB', strength: 0.8, note: '' },
-      { kind: 'BID_WALL', image: 'htf', bookmapPrice: 4060, price: 4050, size: 30, sizeSource: 'COB', strength: 0.5, note: '' },
-      { kind: 'POC', image: 'ltf', bookmapPrice: 4054.5, price: 4044.5, size: 8135, sizeSource: 'SVP', strength: 0.7, note: '' },
-      { kind: 'ABSORPTION', image: 'ltf', bookmapPrice: 4055, price: 4045, strength: 0.6, note: '' },
+      lv('ASK_WALL', 'htf', 4068, 77, 'COB'),
+      lv('ASK_WALL', 'htf', 4053, 25, 'COB'), // < 40% × 77 → ẩn
+      lv('BID_WALL', 'htf', 4030, 40, 'COB'),
+      lv('ASK_WALL', 'ltf', 4050, 18, 'COB'), // tường lớn nhất ảnh ltf → giữ
+      lv('ASK_WALL', 'ltf', 4049, 5, 'COB'), // ẩn
+      lv('BID_WALL', 'ltf', 4040), // không có size → ẩn
+      lv('POC', 'htf', 4044.5, 8136, 'SVP'),
+      lv('POC', 'ltf', 4044.5, 8136, 'SVP'), // trùng giá → 1 vạch
+      lv('HVN', 'ltf', 4046, 4444, 'SVP'), // không vẽ trên chart
+      lv('ABSORPTION', 'ltf', 4045),
     ],
   };
 
-  it('vẽ price line tím kèm khối lượng; độ dày so trong cùng ảnh + nguồn', () => {
+  it('chỉ tường lớn (nhãn = số) + POC; không có price line trên trục giá', () => {
     const m = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow }), candles, '4h');
-    const bm = m.priceLines.filter(p => p.title.startsWith('BM'));
-    expect(bm.map(p => [p.title, p.price, p.width])).toEqual([
-      ['BM Tường bán · 77 lot', 4068, 3],
-      ['BM Tường mua · 30 lot', 4050, 1],
-      ['BM POC · 8135 lot', 4044.5, 3],
-      ['BM Hấp thụ', 4045, 1],
+    expect(m.orderflowLines.map(l => [l.label, l.price])).toEqual([
+      ['77', 4068],
+      ['18', 4050],
+      ['40', 4030],
+      ['POC', 4044.5],
     ]);
+    expect(m.orderflowLines[0]!.color).toBe('rgba(239,83,80,0.3)');
+    expect(m.orderflowLines[2]!.color).toBe('rgba(38,166,154,0.3)');
+    expect(m.priceLines).toHaveLength(0);
+  });
+
+  it('tối đa 3 tường mỗi phía, ưu tiên tường lớn', () => {
+    const many = [80, 70, 60, 50].map((size, i) => lv('ASK_WALL', 'htf', 4060 + i, size, 'COB'));
+    const m = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow: { ...orderflow, levels: many } }), candles, '4h');
+    expect(m.orderflowLines.map(l => l.label)).toEqual(['80', '70', '60']);
   });
 
   it('tắt layer hoặc không có orderflow → không vẽ', () => {
     const off = buildOverlayModel(analysis({ symbol: 'XAUUSD', orderflow }), candles, '4h', { layers: { ...ALL_LAYERS_ON, orderflow: false } });
-    expect(off.priceLines.some(p => p.title.startsWith('BM'))).toBe(false);
-    expect(buildOverlayModel(analysis(), candles, '4h').priceLines.some(p => p.title.startsWith('BM'))).toBe(false);
+    expect(off.orderflowLines).toEqual([]);
+    expect(buildOverlayModel(analysis(), candles, '4h').orderflowLines).toEqual([]);
   });
 });

@@ -23,11 +23,11 @@ Phương án khác: `XAUUSD_SOURCE=oanda` (cần `OANDA_API_TOKEN`, `OANDA_ENV=p
 
 ## Bookmap (order flow, XAUUSD / BTCUSDT)
 
-Tick **"Dùng ảnh Bookmap"** trong panel phân tích rồi chọn/dán 2 ảnh: khung lớn và khung bé. Agent đọc COB, SVP, heatmap, bong bóng, CVD làm bằng chứng xác nhận (không đổi bối cảnh khung lớn, không đổi entry/SL/TP). Mức giá vẽ ở layer "Order flow".
+Khai báo đường dẫn ảnh mà Bookmap ghi ra (ghi đè liên tục) trong `.env`: `BOOKMAP_IMAGE_<SYMBOL>_HTF` / `_LTF` (hỗ trợ `~`). Trong panel tick **"Dùng ảnh Bookmap"**: panel hiện ảnh xem trước + tuổi ảnh; khi job bắt đầu chạy, server copy ảnh mới nhất cho agent. Agent đọc COB, SVP, heatmap, bong bóng, CVD làm bằng chứng xác nhận (không đổi bối cảnh khung lớn, không đổi entry/SL/TP). Chart (layer "Order flow") chỉ vẽ vạch mờ cho tường lớn (đỏ = bán, xanh = mua, nhãn = khối lượng) và POC.
 
 - Vàng trên Bookmap là **GC futures**, cao hơn XAUUSD spot: giá app = giá Bookmap − offset. Offset mặc định `BOOKMAP_OFFSET_XAUUSD=10` (BTC `0`), sửa được trên form. Khi roll hợp đồng (GCZ → GCG…) offset tăng — cập nhật lại.
 - Giá cuối trên ảnh lệch so với giá app lúc chụp quá `BOOKMAP_TOLERANCE_<SYMBOL>` (vàng 3, BTC 60) → cảnh báo **ảnh có thể đã cũ**. Ảnh chụp quá `BOOKMAP_MAX_AGE_MIN` (30) phút → cảnh báo.
-- `BOOKMAP_SYMBOLS` (mặc định `XAUUSD,BTCUSDT`).
+- Symbol có ít nhất một `BOOKMAP_IMAGE_<SYMBOL>_*` mới hiện tick Bookmap.
 
 ## Chạy
 

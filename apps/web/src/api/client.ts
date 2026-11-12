@@ -41,9 +41,22 @@ export function startAnalysis(body: {
   screenshot?: string;
   runner?: RunnerId;
   model?: string;
-  bookmap?: { htf?: string; ltf?: string; capturedAt?: number; offset?: number };
+  bookmap?: { offset?: number };
 }): Promise<AnalysisRecord> {
   return request('/api/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+}
+
+export interface BookmapImageStatus {
+  role: 'htf' | 'ltf';
+  available: boolean;
+  mtime?: number;
+  size?: number;
+  error?: string;
+}
+
+/** Trạng thái file ảnh Bookmap (đường dẫn cấu hình ở server). */
+export function fetchBookmapStatus(symbol: string): Promise<{ now: number; images: BookmapImageStatus[] }> {
+  return request(`/api/bookmap/${encodeURIComponent(symbol)}`);
 }
 
 export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {

@@ -1,3 +1,4 @@
+import { expandHome } from './analysis/bookmapSource.ts';
 import { isRunnerId, isTimeframe, SUPPORTED_TFS, type RunnerId, type Timeframe } from '@wca/shared';
 
 function int(name: string, fallback: number): number {
@@ -36,7 +37,18 @@ function symbolNums(prefix: string, defaults: Record<string, number>): Record<st
   return out;
 }
 
-const defaultTf =(process.env.DEFAULT_TF ?? '4h').toLowerCase();
+/** `BOOKMAP_IMAGE_XAUUSD_HTF=~/ssd/live3.png` → `{ XAUUSD: { htf: '/Users/…/ssd/live3.png' } }`. */
+function bookmapImagePaths(): Record<string, Partial<Record<'htf' | 'ltf', string>>> {
+  const out: Record<string, Partial<Record<'htf' | 'ltf', string>>> = {};
+  for (const [key, raw] of Object.entries(process.env)) {
+    const m = /^BOOKMAP_IMAGE_([A-Z0-9]+)_(HTF|LTF)$/.exec(key);
+    if (!m || !raw?.trim()) continue;
+    (out[m[1]!] ??= {})[m[2]!.toLowerCase() as 'htf' | 'ltf'] = expandHome(raw.trim());
+  }
+  return out;
+}
+
+const defaultTf = (process.env.DEFAULT_TF ?? '4h').toLowerCase();
 
 export const config = {
   host: process.env.HOST ?? '127.0.0.1',
@@ -80,8 +92,8 @@ export const config = {
   okxVolumeInst: process.env.OKX_VOLUME_INST || 'XAU-USDT-SWAP',
   /** Chu kỳ poll realtime cho nguồn không có WebSocket (OANDA). */
   livePollMs: int('LIVE_POLL_MS', 2000),
-  /** Symbol được gửi kèm ảnh Bookmap (order flow). */
-  bookmapSymbols: (process.env.BOOKMAP_SYMBOLS ?? 'XAUUSD,BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Đường dẫn ảnh Bookmap theo symbol/khung: `BOOKMAP_IMAGE_<SYMBOL>_<HTF|LTF>` (hỗ trợ `~`). Symbol có path mới dùng được Bookmap. */
+  bookmapImages: bookmapImagePaths(),
   /** Offset mặc định = giá Bookmap − giá app (vàng: GC futures cao hơn spot), theo `BOOKMAP_OFFSET_<SYMBOL>`. */
   bookmapOffsets: symbolNums('BOOKMAP_OFFSET_', { XAUUSD: 10, BTCUSDT: 0 }),
   /** Ngưỡng lệch offset (đơn vị giá) để cảnh báo ảnh cũ, theo `BOOKMAP_TOLERANCE_<SYMBOL>`. */

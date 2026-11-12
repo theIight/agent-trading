@@ -139,3 +139,44 @@
 
 - Chạy thật lần 1 (XAUUSD, Claude): agent đặt TP1 = 4078 = giá Bookmap **chưa trừ offset** (tường thật ở 4068 trên chart). Đã bổ sung: prompt + mô tả `get_bookmap_images` nhấn mạnh phải trừ offset khi dùng mức Bookmap cho setup; validator cảnh báo khi entry/SL/TP trùng `bookmapPrice` chưa quy đổi (chỉ cảnh báo, không sửa setup).
 - Ảnh `~/ssd/live*.png` được Bookmap ghi đè liên tục → `File.lastModified` là thời điểm chụp thật.
+
+## 8. Thiết kế lại hiển thị Order flow trên chart (đã duyệt 2026-11-11)
+
+**Vấn đề** (người dùng, 2026-11-11): nhãn `BM Tường bán · 77 lot` to, rối mắt; tường nhỏ cũng vẽ; vạch đậm quá.
+
+**Thiết kế mới:**
+1. **Vẽ bằng primitive riêng** thay cho price line của lightweight-charts (price line không chỉnh được cỡ chữ và luôn chiếm nhãn trên trục giá):
+   - Vạch nét chấm mảnh, **độ đậm ~30%**, chạy ngang toàn chart.
+   - Nhãn nhỏ (10px) sát mép phải vùng nến, **chỉ có con số**: `77`, `25.8`.
+   - **Màu thay chữ**: tường bán đỏ nhạt, tường mua xanh nhạt, POC tím nhạt.
+   - **Không highlight mức giá trên trục giá** (không có ô giá màu bên phải) — người dùng tự dóng theo vạch.
+2. **Lọc tường nhỏ**: chỉ vẽ tường (ASK_WALL / BID_WALL) có `size` ≥ 40% tường lớn nhất cùng ảnh; tối đa 3 tường mỗi phía. Tường không có số → không vẽ.
+3. **POC**: vạch tím nhạt, nhãn `POC`. **HVN / LVN / ABSORPTION / AGGRESSION không vẽ trên chart**, chỉ liệt kê ở panel (vẫn đủ thông tin).
+4. Rê chuột không cần; chi tiết (loại, giá Bookmap, nguồn COB/SVP, ghi chú) xem ở mục "Order flow" của panel.
+5. Panel: thêm chú thích màu (đỏ = tường bán, xanh = tường mua, tím = POC); HVN đổi tên hiển thị thành "Vùng volume cao (HVN)", LVN → "Vùng volume thấp (LVN)".
+
+**Kỹ thuật:** `overlays/model.ts` thêm `orderflowLines: {price, color, label}[]` (lọc như trên, pure + test); `OverlayPrimitive` vẽ lớp này; bỏ price line `BM …`. Ngưỡng 40% / tối đa 3 là hằng số trong `model.ts`.
+
+**Acceptance:** ảnh chụp chart XAUUSD chỉ còn vài vạch mảnh, nhãn số nhỏ, không có chữ "BM"; tường < 40% bị ẩn; HVN không hiện trên chart; test model cập nhật; typecheck/lint/test xanh.
+
+## 9. Lấy ảnh Bookmap theo đường dẫn thay vì upload (đã duyệt 2026-11-11)
+
+**Bối cảnh:** Bookmap ghi đè liên tục `~/ssd/live1..4.png`, upload tay là thừa.
+
+**Spec:**
+1. Đường dẫn cấu hình **ở server** (`.env`), client không gửi path (tránh đọc file tuỳ ý):
+   ```
+   BOOKMAP_IMAGE_XAUUSD_HTF=/Users/<user>/ssd/live3.png
+   BOOKMAP_IMAGE_XAUUSD_LTF=/Users/<user>/ssd/live4.png
+   BOOKMAP_IMAGE_BTCUSDT_HTF=/Users/<user>/ssd/live1.png
+   BOOKMAP_IMAGE_BTCUSDT_LTF=/Users/<user>/ssd/live2.png
+   ```
+   Hỗ trợ `~`. Chỉ `.png/.jpg/.jpeg`, ≤ 10 MB. Symbol có ảnh khi có ít nhất 1 path → thay cho `BOOKMAP_SYMBOLS`.
+2. **Bỏ upload tay.** Panel: tick "Dùng ảnh Bookmap" → hiện 2 thumbnail xem trước lấy từ server, kèm tuổi ảnh ("cập nhật 8 giây trước"; > 30 phút tô đỏ "ảnh cũ — Bookmap có đang chạy?"). Nút làm mới thumbnail. File không tồn tại → báo lỗi ngay trong ô. Ô offset giữ nguyên.
+3. `POST /api/analyses` chỉ gửi `bookmap: { offset? }` (bật/tắt). Server **chụp lại (copy) file ngay lúc job bắt đầu chạy** (không phải lúc bấm, để ảnh mới nhất nếu phải chờ hàng đợi) vào `data/screenshots/<id>-bookmap-*.png`; `capturedAt` = mtime file, `submittedAt` = lúc copy. Không đọc được file nào → job FAILED với lỗi rõ ràng.
+4. API: `GET /api/bookmap/:symbol` → `{roles: [{role, available, mtime, size, error?}]}`; `GET /api/bookmap/:symbol/:role` → ảnh (chỉ localhost như các API khác). `/api/config.bookmap.symbols` = symbol có path.
+5. Phần còn lại (MCP, validator, kiểm tra ảnh cũ, offset) không đổi.
+
+**Kỹ thuật:** `config.ts` đọc `BOOKMAP_IMAGE_<SYMBOL>_<HTF|LTF>`; `analysis/bookmapSource.ts` (resolve path, stat, copy — test với thư mục tạm); service: `prepareBookmap` chỉ kiểm tra + lưu offset, copy ảnh trong `pump()` trước khi gọi runner; route mới; web: thay `BookmapSlot` upload bằng thumbnail `<img src="/api/bookmap/XAUUSD/htf?t=...">`, bỏ state ảnh/FileReader.
+
+**Acceptance:** cấu hình 4 path → tick là chạy được, không chọn file; ảnh lưu kèm phân tích là bản tại lúc job chạy; path sai → thông báo trong panel và job lỗi rõ; test service copy + mtime; SPEC/README/.env.example cập nhật; ảnh UI.

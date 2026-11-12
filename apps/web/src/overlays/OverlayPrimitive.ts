@@ -41,6 +41,9 @@ function yOf(ctx: Ctx, price: number): number | null {
 }
 
 const FONT = '11px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
+const OF_FONT = '10px -apple-system, BlinkMacSystemFont, Roboto, sans-serif';
+/** Khoảng cách dọc tối thiểu giữa 2 nhãn order flow (px). */
+const OF_LABEL_GAP = 11;
 
 function drawLabel(c: CanvasRenderingContext2D, text: string, x: number, y: number, color: string, align: CanvasTextAlign = 'left') {
   c.font = FONT;
@@ -70,6 +73,32 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
         c.setLineDash([]);
         // Đặt nhãn ngay trên vùng volume (volume chiếm ~18% dưới cùng).
         if (x2 - x1 > 40) drawLabel(c, b.label, (x1 + x2) / 2, mediaSize.height * 0.8 - 8, this.ctx.textColor, 'center');
+      }
+      // Order flow (Bookmap): vạch mờ sau nến, nhãn số nhỏ sát mép phải, không có nhãn trên trục giá.
+      c.font = OF_FONT;
+      c.textAlign = 'right';
+      c.textBaseline = 'bottom';
+      c.setLineDash([2, 3]);
+      c.lineWidth = 1;
+      const ofLabels: { y: number; text: string; color: string }[] = [];
+      for (const of of this.ctx.model.orderflowLines) {
+        const y = yOf(this.ctx, of.price);
+        if (y === null) continue;
+        const py = Math.round(y) + 0.5;
+        c.strokeStyle = of.color;
+        c.beginPath();
+        c.moveTo(0, py);
+        c.lineTo(mediaSize.width, py);
+        c.stroke();
+        ofLabels.push({ y: py - 1, text: of.label, color: of.textColor });
+      }
+      c.setLineDash([]);
+      // Vạch sát nhau → giãn nhãn dọc để không đè (nhãn dưới cùng giữ sát vạch).
+      ofLabels.sort((p, q) => q.y - p.y);
+      for (let i = 1; i < ofLabels.length; i++) ofLabels[i]!.y = Math.min(ofLabels[i]!.y, ofLabels[i - 1]!.y - OF_LABEL_GAP);
+      for (const l of ofLabels) {
+        c.fillStyle = l.color;
+        c.fillText(l.text, mediaSize.width - 4, l.y);
       }
     });
   }

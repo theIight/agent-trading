@@ -79,7 +79,7 @@ export class OverlayManager {
       this.ctrl.candleSeries.createPriceLine({
         price: pl.price,
         color: pl.color,
-        lineWidth: pl.width ?? 1,
+        lineWidth: 1,
         lineStyle: LINE_STYLE[pl.style],
         axisLabelVisible: true,
         title: pl.title,

@@ -1,8 +1,6 @@
 import {
   BEARISH_EVENTS,
   BULLISH_EVENTS,
-  bookmapSizeUnit,
-  ORDERFLOW_KIND_LABELS,
   tfLabel,
   tfSeconds,
   type AnalysisResult,
@@ -43,7 +41,13 @@ export const COLORS = {
   entryZone: 'rgba(255,193,7,0.16)',
   entryZoneStroke: 'rgba(255,193,7,0.8)',
   entry: '#b2b5be',
-  orderflow: '#ab47bc',
+  /** Order flow (Bookmap): vạch mờ ~30%, nhãn số đậm hơn để đọc được. */
+  ofAsk: 'rgba(239,83,80,0.3)',
+  ofAskText: 'rgba(239,83,80,0.8)',
+  ofBid: 'rgba(38,166,154,0.3)',
+  ofBidText: 'rgba(38,166,154,0.85)',
+  ofPoc: 'rgba(171,71,188,0.3)',
+  ofPocText: 'rgba(186,104,200,0.85)',
   phaseFills: ['rgba(255,193,7,0.06)', 'rgba(156,39,176,0.06)', 'rgba(0,188,212,0.06)', 'rgba(76,175,80,0.06)', 'rgba(255,87,34,0.06)'],
 };
 
@@ -101,9 +105,20 @@ export interface PriceLineItem {
   color: string;
   title: string;
   style: 'solid' | 'dashed' | 'dotted';
-  /** Độ dày nét (mặc định 1). */
-  width?: 1 | 2 | 3;
 }
+
+/** Vạch order flow (Bookmap): ngang toàn chart, nhãn nhỏ ở mép phải, không gắn nhãn trên trục giá. */
+export interface OrderflowLineItem {
+  price: number;
+  color: string;
+  textColor: string;
+  label: string;
+}
+
+/** Chỉ vẽ tường có size ≥ tỉ lệ này × tường lớn nhất cùng ảnh. */
+export const OF_MIN_WALL_RATIO = 0.4;
+/** Tối đa số tường mỗi phía (bán / mua). */
+export const OF_MAX_WALLS_PER_SIDE = 3;
 
 export interface OverlayModel {
   markers: MarkerItem[];
@@ -111,11 +126,12 @@ export interface OverlayModel {
   bands: BandItem[];
   lines: LineItem[];
   priceLines: PriceLineItem[];
+  orderflowLines: OrderflowLineItem[];
   /** Số nến (khung hiện tại) mà overlay kéo dài sang tương lai — để mở rộng rightOffset. */
   futureBars: number;
 }
 
-export const EMPTY_MODEL: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], futureBars: 0 };
+export const EMPTY_MODEL: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], orderflowLines: [], futureBars: 0 };
 
 /** Ánh xạ thời gian (giây) → chỉ số logic (có phần lẻ) trên khung hiện tại; ngoại suy trước/sau dữ liệu. */
 export function makeTimeMapper(candles: readonly Candle[], tf: Timeframe): (time: number) => number | null {
@@ -298,7 +314,7 @@ export function buildOverlayModel(
   const visibleTf = (tf: Timeframe) => opts.showLowerTfItems || tfSeconds(tf) >= curSec;
   const tfTag = (tf: Timeframe) => (tf === currentTf ? '' : `·${tfLabel(tf)}`);
   const last = candles[candles.length - 1]!;
-  const model: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], futureBars: 0 };
+  const model: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], orderflowLines: [], futureBars: 0 };
   let maxTime = last.time;
 
   if (layers.events) {
@@ -371,27 +387,7 @@ export function buildOverlayModel(
     }
   }
 
-  if (layers.orderflow && analysis.orderflow) {
-    const levels = analysis.orderflow.levels.filter(lv => lv.price !== undefined);
-    // Độ dày theo size tương đối, chỉ so trong cùng ảnh + cùng nguồn (COB ≠ SVP).
-    const maxSize = new Map<string, number>();
-    for (const lv of levels) {
-      if (lv.size === undefined) continue;
-      const key = `${lv.image}:${lv.sizeSource}`;
-      maxSize.set(key, Math.max(maxSize.get(key) ?? 0, lv.size));
-    }
-    const unit = bookmapSizeUnit(analysis.symbol);
-    for (const lv of levels) {
-      let width: 1 | 2 | 3 = 1;
-      let sizeText = '';
-      if (lv.size !== undefined) {
-        const ratio = lv.size / (maxSize.get(`${lv.image}:${lv.sizeSource}`) ?? lv.size);
-        width = ratio >= 0.999 ? 3 : ratio >= 0.5 ? 2 : 1;
-        sizeText = ` · ${Number(lv.size.toFixed(2))}${unit ? ` ${unit}` : ''}`;
-      }
-      model.priceLines.push({ price: lv.price!, color: COLORS.orderflow, style: 'dotted', width, title: `BM ${ORDERFLOW_KIND_LABELS[lv.kind]}${sizeText}` });
-    }
-  }
+  if (layers.orderflow && analysis.orderflow) model.orderflowLines = buildOrderflowLines(analysis.orderflow.levels);
 
   if (layers.forecast) {
     const ranked = [...analysis.scenarios].sort((a, b) => b.probability - a.probability);
@@ -454,4 +450,36 @@ export function buildOverlayModel(
 
   model.futureBars = Math.max(0, Math.ceil((maxTime - last.time) / curSec));
   return model;
+}
+
+const fmtSize = (n: number) => String(Number(n.toFixed(2)));
+
+/**
+ * Vạch order flow trên chart: chỉ tường lớn (≥ OF_MIN_WALL_RATIO × tường lớn nhất cùng ảnh, tối đa
+ * OF_MAX_WALLS_PER_SIDE mỗi phía, phải có size) và POC. HVN/LVN/hấp thụ/lệnh lớn chỉ hiện ở panel.
+ */
+export function buildOrderflowLines(levels: NonNullable<AnalysisResult['orderflow']>['levels']): OrderflowLineItem[] {
+  const placed = levels.filter(lv => lv.price !== undefined);
+  const walls = placed.filter(lv => (lv.kind === 'ASK_WALL' || lv.kind === 'BID_WALL') && lv.size !== undefined);
+  const maxByImage = new Map<string, number>();
+  for (const w of walls) maxByImage.set(w.image, Math.max(maxByImage.get(w.image) ?? 0, w.size!));
+  const big = walls.filter(w => w.size! >= OF_MIN_WALL_RATIO * maxByImage.get(w.image)!);
+  const out: OrderflowLineItem[] = [];
+  for (const kind of ['ASK_WALL', 'BID_WALL'] as const) {
+    const ask = kind === 'ASK_WALL';
+    big
+      .filter(w => w.kind === kind)
+      .sort((a, b) => b.size! - a.size!)
+      .slice(0, OF_MAX_WALLS_PER_SIDE)
+      .forEach(w =>
+        out.push({ price: w.price!, color: ask ? COLORS.ofAsk : COLORS.ofBid, textColor: ask ? COLORS.ofAskText : COLORS.ofBidText, label: fmtSize(w.size!) }),
+      );
+  }
+  const pocs = new Set<number>();
+  for (const lv of placed) {
+    if (lv.kind !== 'POC' || pocs.has(lv.price!)) continue;
+    pocs.add(lv.price!);
+    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC' });
+  }
+  return out;
 }

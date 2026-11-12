@@ -92,7 +92,7 @@ export async function buildApp(deps: AppDeps = {}) {
     barsPerTf: cfg.agentBarsPerTf,
     screenshotDir: path.join(dataDir, 'screenshots'),
     minRiskReward: cfg.setupMinRr,
-    bookmap: { symbols: cfg.bookmapSymbols, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
+    bookmap: { images: cfg.bookmapImages, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -112,8 +112,8 @@ export async function buildApp(deps: AppDeps = {}) {
     tiingoConfigured: Boolean(cfg.tiingoApiToken),
     agentMaxTfs: cfg.agentMaxTfs,
     bookmap: {
-      symbols: cfg.bookmapSymbols,
-      offsets: Object.fromEntries(cfg.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
+      symbols: service.bookmapSymbols,
+      offsets: Object.fromEntries(service.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
     } satisfies BookmapUiConfig,
   }));
   registerKlineRoutes(app, klines, router, lives);

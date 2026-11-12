@@ -18,11 +18,10 @@ import { KlineService } from '../apps/server/src/market/klineService.ts';
 import type { FetchKlinesParams, MarketDataProvider } from '../apps/server/src/market/provider.ts';
 import type { AgentRunHooks, AgentRunRequest, AgentRunner, AgentRunOutcome } from '../apps/server/src/runner/types.ts';
 import { validateOrderflow, type OrderflowContext } from '../apps/server/src/validate/orderflow.ts';
+import { expandHome } from '../apps/server/src/analysis/bookmapSource.ts';
 import { buildUserPrompt } from '../apps/server/src/runner/prompt.ts';
 import { buildAgyPromptSuffix, SUBMIT_FORMAT_APPENDIX } from '../apps/server/src/runner/agyFormat.ts';
 
-const PNG = 'data:image/png;base64,' + Buffer.from('fake-png').toString('base64');
-const JPG = 'data:image/jpeg;base64,' + Buffer.from('fake-jpg').toString('base64');
 
 describe('quy đổi & kiểm tra ảnh cũ', () => {
   it('giá app = giá Bookmap − offset', () => {
@@ -155,7 +154,18 @@ class FakeRunner implements AgentRunner {
   }
 }
 
-function setup(behavior: Behavior, supportsBookmap = true) {
+/** Thư mục giả lập file Bookmap ghi ra (htf = png, ltf = jpg), mtime = END. */
+function bookmapFiles() {
+  const src = fs.mkdtempSync(path.join(os.tmpdir(), 'wca-bm-src-'));
+  const htf = path.join(src, 'live1.png');
+  const ltf = path.join(src, 'live2.jpg');
+  fs.writeFileSync(htf, 'png-v1');
+  fs.writeFileSync(ltf, 'jpg-v1');
+  for (const f of [htf, ltf]) fs.utimesSync(f, END, END);
+  return { htf, ltf };
+}
+
+function setup(behavior: Behavior, supportsBookmap = true, images: Record<string, { htf?: string; ltf?: string }> = { BTCUSDT: bookmapFiles() }) {
   const db = openDb(':memory:');
   const repo = new AnalysisRepo(db);
   const runner = new FakeRunner(behavior, supportsBookmap);
@@ -165,10 +175,10 @@ function setup(behavior: Behavior, supportsBookmap = true) {
     barsPerTf: 300,
     screenshotDir: dir,
     validationBars: 300,
-    bookmap: { symbols: ['XAUUSD', 'BTCUSDT'], offsets: { BTCUSDT: 10 }, tolerances: { BTCUSDT: 3 }, maxAgeMin: 30 },
+    bookmap: { images, offsets: { BTCUSDT: 10 }, tolerances: { BTCUSDT: 3 }, maxAgeMin: 30 },
   });
   runner.service = service;
-  return { service, repo, runner, dir };
+  return { service, repo, runner, dir, images };
 }
 
 const waitFor = async (cond: () => boolean, ms = 2000) => {
@@ -192,23 +202,40 @@ function submission(over: Partial<AnalysisSubmissionInput> = {}): AnalysisSubmis
   };
 }
 
-describe('AnalysisService + Bookmap', () => {
-  it('symbol ngoài danh sách / thiếu ảnh / sai định dạng / runner không hỗ trợ → lỗi', () => {
-    const { service } = setup(async () => ({ ok: true }));
-    expect(() => service.start({ symbol: 'ETHUSDT', primaryTf: '4h', contextTfs: [], bookmap: { htf: PNG } })).toThrow(/chỉ hỗ trợ XAUUSD, BTCUSDT/);
-    expect(() => service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} })).toThrow(/ít nhất 1 ảnh/);
-    expect(() => service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: { htf: 'data:image/gif;base64,AAAA' } })).toThrow(/PNG hoặc JPEG/);
+describe('AnalysisService + Bookmap (ảnh theo đường dẫn cấu hình)', () => {
+  it('symbol chưa cấu hình / runner không hỗ trợ → lỗi; symbol có path mới được liệt kê', () => {
+    const { service } = setup(async () => ({ ok: true }), true, { BTCUSDT: bookmapFiles(), XAUUSD: {} });
+    expect(service.bookmapSymbols).toEqual(['BTCUSDT']);
+    expect(() => service.start({ symbol: 'ETHUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} })).toThrow(/Chưa cấu hình ảnh Bookmap cho ETHUSDT/);
+    expect(() => service.start({ symbol: 'XAUUSD', primaryTf: '4h', contextTfs: [], bookmap: {} })).toThrow(/Chưa cấu hình/);
     const { service: s2 } = setup(async () => ({ ok: true }), false);
-    expect(() => s2.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: { htf: PNG } })).toThrow(/không nhận được ảnh Bookmap/);
+    expect(() => s2.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} })).toThrow(/không nhận được ảnh Bookmap/);
   });
 
-  it('lưu ảnh + meta, request/MCP có bookmap, submit quy đổi giá + cảnh báo ảnh cũ', async () => {
+  it('trạng thái + ảnh xem trước; file thiếu / sai định dạng báo lỗi rõ', () => {
+    const { service } = setup(async () => ({ ok: true }), true, { BTCUSDT: { htf: bookmapFiles().htf, ltf: '/khong/ton/tai.png' }, XAUUSD: { htf: '/tmp/x.gif' } });
+    expect(service.bookmapStatus('btcusdt')).toEqual([
+      { role: 'htf', available: true, mtime: END, size: 6 },
+      { role: 'ltf', available: false, error: 'Không tìm thấy ảnh: /khong/ton/tai.png' },
+    ]);
+    expect(service.bookmapPreview('BTCUSDT', 'htf')).toMatchObject({ mimeType: 'image/png', mtime: END });
+    expect(() => service.bookmapPreview('BTCUSDT', 'ltf')).toThrow(/Không tìm thấy ảnh/);
+    expect(() => service.bookmapPreview('BTCUSDT', 'xyz')).toThrow(/Chưa cấu hình/);
+    expect(service.bookmapStatus('XAUUSD')[0]).toMatchObject({ available: false, error: expect.stringMatching(/\.png\/\.jpg/) });
+    expect(() => service.bookmapStatus('ETHUSDT')).toThrow(/Chưa cấu hình/);
+  });
+
+  it('copy ảnh khi job chạy, request/MCP có bookmap, submit quy đổi giá + cảnh báo ảnh cũ', async () => {
     const { service, repo, runner, dir } = setup(async (req, _hooks, svc) => {
       expect(req.hasBookmap).toBe(true);
+      expect(fs.readdirSync(dir).sort()).toEqual([`${req.analysisId}-bookmap-htf.png`, `${req.analysisId}-bookmap-ltf.jpg`, `${req.analysisId}-bookmap.json`].sort());
       const info = await svc.getRequest(req.analysisId);
       expect(info.bookmap).toMatchObject({ images: ['htf', 'ltf'], offset: 10, refPrice: 100 });
       const imgs = await svc.bookmapImages(req.analysisId);
-      expect(imgs.images.map(i => [i.role, i.mimeType])).toEqual([['htf', 'image/png'], ['ltf', 'image/jpeg']]);
+      expect(imgs.images.map(i => [i.role, i.mimeType, Buffer.from(i.data, 'base64').toString()])).toEqual([
+        ['htf', 'image/png', 'png-v1'],
+        ['ltf', 'image/jpeg', 'jpg-v1'],
+      ]);
       const res = await svc.submit(
         req.analysisId,
         submission({
@@ -222,17 +249,44 @@ describe('AnalysisService + Bookmap', () => {
       expect(res.ok).toBe(true);
       return { ok: true, durationMs: 1 };
     });
-    const rec = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: { htf: PNG, ltf: JPG, capturedAt: END } });
+    const rec = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} });
     expect(rec.bookmap).toBe(true);
-    expect(fs.readdirSync(dir).sort()).toEqual([`${rec.id}-bookmap-htf.png`, `${rec.id}-bookmap-ltf.jpg`, `${rec.id}-bookmap.json`].sort());
     await waitFor(() => repo.get(rec.id)?.status === 'DONE');
     const done = repo.get(rec.id)!;
-    expect(done.bookmap).toBe(true);
     expect(repo.list().find(r => r.id === rec.id)?.bookmap).toBe(true);
     expect(done.result?.orderflow).toMatchObject({ offset: 10, measuredOffset: 25, levels: [{ price: 110, size: 5 }] });
     expect(done.result?.warnings.some(w => w.includes('có thể đã cũ: giá cuối 125'))).toBe(true);
-    expect(done.result?.warnings.some(w => w.includes('chụp cách lúc gửi'))).toBe(true); // capturedAt = END (1 ngày trước)
+    expect(done.result?.warnings.some(w => w.includes('chụp cách lúc gửi'))).toBe(true); // mtime = END (1 ngày trước)
     expect(runner.lastReq?.hasBookmap).toBe(true);
+  });
+
+  it('job phải chờ hàng đợi → lấy ảnh mới nhất lúc bắt đầu chạy', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>(r => (release = r));
+    const seen: string[] = [];
+    const { service, repo, images } = setup(async (req, _hooks, svc) => {
+      if (!req.hasBookmap) {
+        await gate;
+        return { ok: false, error: 'stop' };
+      }
+      const imgs = await svc.bookmapImages(req.analysisId);
+      seen.push(Buffer.from(imgs.images[0]!.data, 'base64').toString());
+      return { ok: false, error: 'stop' };
+    });
+    service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [] });
+    const b = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} });
+    fs.writeFileSync(images.BTCUSDT!.htf!, 'png-v2'); // Bookmap ghi đè trong lúc chờ
+    release();
+    await waitFor(() => repo.get(b.id)?.status === 'FAILED');
+    expect(seen).toEqual(['png-v2']);
+  });
+
+  it('không đọc được ảnh nào lúc chạy → FAILED với lỗi rõ ràng', async () => {
+    const { service, repo, runner } = setup(async () => ({ ok: true }), true, { BTCUSDT: { htf: '/khong/co.png' } });
+    const rec = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: {} });
+    await waitFor(() => repo.get(rec.id)?.status === 'FAILED');
+    expect(repo.get(rec.id)?.error).toMatch(/Không đọc được ảnh Bookmap: Không tìm thấy ảnh/);
+    expect(runner.lastReq).toBeNull();
   });
 
   it('offset người dùng nhập ghi đè mặc định; không có Bookmap → orderflow bị bỏ', async () => {
@@ -244,13 +298,20 @@ describe('AnalysisService + Bookmap', () => {
       expect(res.ok).toBe(true);
       return { ok: true, durationMs: 1 };
     });
-    const a = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: { ltf: PNG, offset: 4 } });
+    const a = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [], bookmap: { offset: 4 } });
     const b = service.start({ symbol: 'BTCUSDT', primaryTf: '4h', contextTfs: [] });
     await waitFor(() => repo.get(b.id)?.status === 'DONE');
     expect(repo.get(a.id)?.result?.orderflow?.offset).toBe(4);
     expect(repo.get(b.id)?.bookmap).toBeUndefined();
     expect(repo.get(b.id)?.result?.orderflow).toBeUndefined();
     expect(repo.get(b.id)?.result?.warnings).toContain('Bỏ orderflow: phân tích này không có ảnh Bookmap');
+  });
+});
+
+describe('expandHome', () => {
+  it('mở rộng ~', () => {
+    expect(expandHome('~/ssd/live1.png')).toBe(path.join(os.homedir(), 'ssd/live1.png'));
+    expect(expandHome('/abs/a.png')).toBe('/abs/a.png');
   });
 });
 
