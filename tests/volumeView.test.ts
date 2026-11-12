@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { spikeRatios, volumeSourceValue, type Candle, type VolumeAggBar } from '@wca/shared';
-import { buildVolumeView } from '../apps/web/src/chart/volumeView.ts';
+import { aggCoverageFrom, buildVolumeView } from '../apps/web/src/chart/volumeView.ts';
 import { DEFAULT_DISPLAY, sanitizeDisplay } from '../apps/web/src/chart/displaySettings.ts';
 
 const colors = { up: 'u', down: 'd', upSolid: 'U', downSolid: 'D' };
@@ -56,6 +56,21 @@ describe('buildVolumeView', () => {
     expect(v.main[20]).toEqual({ time: 1200, value: 100, color: 'u' }); // nến đang chạy giữ Binance Futures
     expect(v.spot[19]).toEqual({ time: 1140, value: 140 });
     expect(v.labels).toEqual([{ time: 1140, value: 140, text: 'S', color: '#ff9800' }]);
+  });
+
+  it('gộp: nến đã đóng ngoài vùng có agg để trống, không lấy volume Binance Futures thay', () => {
+    const partial = new Map([...bars].slice(5));
+    const v = buildVolumeView(candles, partial, 'stacked', 3, colors);
+    expect(v.main[0]).toEqual({ time: 0 });
+    expect(v.main[5]).toEqual({ time: 300, value: 100, color: 'D' });
+    expect(v.main[20]).toEqual({ time: 1200, value: 100, color: 'u' });
+  });
+
+  it('aggCoverageFrom: chỉ báo mốc khi chart có nhiều nến đã đóng hơn agg', () => {
+    const list = [...bars.values()];
+    expect(aggCoverageFrom(21, list)).toBeNull(); // 20 nến đã đóng + 1 đang chạy
+    expect(aggCoverageFrom(30, list.slice(5))).toBe(300);
+    expect(aggCoverageFrom(30, [])).toBeNull();
   });
 });
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { tfLabel, VOLUME_SOURCE_LABELS, type InstrumentInfo } from '@wca/shared';
+import { tfLabel, VOLAGG_MAX_BARS, VOLUME_SOURCE_LABELS, type InstrumentInfo } from '@wca/shared';
 import { ChartController, type LegendData } from '../chart/ChartController.ts';
 import { OverlayManager } from '../overlays/OverlayManager.ts';
 import { buildDemoAnalysis, type DemoVariant } from '../overlays/demoAnalysis.ts';
@@ -10,6 +10,7 @@ import { useLiquidationStore } from '../store/useLiquidationStore.ts';
 import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
+import { aggCoverageFrom } from '../chart/volumeView.ts';
 
 function fmt(n: number): string {
   const digits = n >= 1000 ? 1 : n >= 1 ? 4 : 6;
@@ -21,6 +22,14 @@ function fmtVol(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(2)}K`;
   return n.toFixed(2);
+}
+
+/** Mốc giờ máy, dạng dd/MM HH:mm (thêm năm nếu khác năm nay). */
+function fmtAggFrom(sec: number): string {
+  const d = new Date(sec * 1000);
+  const p2 = (n: number) => String(n).padStart(2, '0');
+  const year = d.getFullYear() === new Date().getFullYear() ? '' : `/${d.getFullYear()}`;
+  return `${p2(d.getDate())}/${p2(d.getMonth() + 1)}${year} ${p2(d.getHours())}:${p2(d.getMinutes())}`;
 }
 
 const DEMO_PARAM = new URLSearchParams(window.location.search).get('demo');
@@ -50,6 +59,7 @@ export function ChartView({ onStatus, onReady }: Props) {
   const settings = useChartSettingsStore(s => s.settings);
   /** Số nến + mốc nến cuối trên chart: đổi khi có nến mới / tải thêm lịch sử → tải lại volume gộp. */
   const [bars, setBars] = useState<{ count: number; lastTime: number | null }>({ count: 0, lastTime: null });
+  const volAggFrom = volAggOn && volAgg && volAgg.symbol === symbol && volAgg.tf === tf ? aggCoverageFrom(bars.count, volAgg.bars) : null;
   const { data: liveOf, error: liveOfError, watch: watchOrderflow } = useOrderflowStore();
   const liveOfSymbol = orderflowSymbols.includes(symbol) ? symbol : null;
 
@@ -119,7 +129,7 @@ export function ChartView({ onStatus, onReady }: Props) {
 
   // Volume gộp (BTC, nến đã đóng): tải khi bật toggle, khi đổi symbol/khung và khi có nến mới đóng.
   useEffect(() => {
-    syncVolAgg(volAggSymbol, tf, Math.min(bars.count, 1000), bars.lastTime);
+    syncVolAgg(volAggSymbol, tf, Math.min(bars.count, VOLAGG_MAX_BARS), bars.lastTime);
   }, [volAggSymbol, tf, bars, volSource, syncVolAgg]);
 
   useEffect(() => {
@@ -197,12 +207,16 @@ export function ChartView({ onStatus, onReady }: Props) {
           Thanh lý: {liqError ? `lỗi tải (${liqError})` : liq!.notes.join(' · ')}
         </div>
       )}
-      {volAggOn && (volAggError || (volAgg && (volAgg.notes.length > 0 || (volSource !== 'stacked')))) && (
+      {volAggOn && (volAggError || (volAgg && (volAgg.notes.length > 0 || volSource !== 'stacked' || volAggFrom !== null))) && (
         <div className={`of-chart-status volagg-chart-status ${volAggError ? 'down' : 'muted'}`}>
           Volume {VOLUME_SOURCE_LABELS[volSource]}:{' '}
           {volAggError
             ? `lỗi tải (${volAggError})`
-            : [...(volSource !== 'stacked' ? [`nến đang chạy chưa có volume ${VOLUME_SOURCE_LABELS[volSource]}`] : []), ...volAgg!.notes].join(' · ')}
+            : [
+                ...(volSource !== 'stacked' ? [`nến đang chạy chưa có volume ${VOLUME_SOURCE_LABELS[volSource]}`] : []),
+                ...(volAggFrom !== null ? [`volume nhiều sàn chỉ có từ ${fmtAggFrom(volAggFrom)}`] : []),
+                ...volAgg!.notes,
+              ].join(' · ')}
         </div>
       )}
       {error && <div className="chart-error">Lỗi tải dữ liệu: {error}</div>}

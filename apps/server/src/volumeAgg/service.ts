@@ -5,7 +5,8 @@ import type { VenueSymbols, VolumeFetcher } from './sources.ts';
 
 // Volume gộp: cache SQLite theo (symbol, sàn, khung, thời gian) — mỗi nến đã đóng chỉ tải một lần.
 
-export const VOLAGG_MAX_BARS = 1000;
+import { VOLAGG_MAX_BARS } from '@wca/shared';
+export { VOLAGG_MAX_BARS };
 /** Sàn lỗi / thiếu nến: không thử lại trong khoảng này (giây). */
 const RETRY_SEC = 120;
 

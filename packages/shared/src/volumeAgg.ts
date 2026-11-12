@@ -47,6 +47,9 @@ export interface VolumeAggResponse {
 // ---------- Nguồn volume hiển thị trên chart ----------
 
 /** `futures` = volume nến chart (Binance Futures, như mặc định); `stacked` = perp 3 sàn + spot chồng; còn lại = một nguồn / tổng. */
+/** Số nến đã đóng tối đa của volume nhiều sàn mỗi lần tải (≈ 5 trang lịch sử chart). */
+export const VOLAGG_MAX_BARS = 4000;
+
 export const VOLUME_SOURCES = ['futures', 'stacked', 'binanceSpot', 'okx', 'bybit', 'total'] as const;
 export type VolumeSource = (typeof VOLUME_SOURCES)[number];
 

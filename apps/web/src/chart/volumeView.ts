@@ -50,10 +50,12 @@ export function buildVolumeView(
     return { main: candles.map(c => ({ time: c.time, value: c.volume, color: upOf(c) ? colors.up : colors.down })), spot: [], labels: [], runningMissing: false };
   }
   if (source === 'stacked') {
-    const main = candles.map(c => {
+    const main = candles.map((c, i): VolumeColumn => {
       const a = agg.get(c.time);
       // Màu đặc khi có cột spot phía sau (màu trong suốt sẽ lộ màu cam).
-      return a ? { time: c.time, value: a.perp, color: upOf(c) ? colors.upSolid : colors.downSolid } : { time: c.time, value: c.volume, color: upOf(c) ? colors.up : colors.down };
+      if (a) return { time: c.time, value: a.perp, color: upOf(c) ? colors.upSolid : colors.downSolid };
+      // Nến đang chạy giữ volume Binance Futures; nến đã đóng ngoài vùng có dữ liệu để trống (không trộn thang).
+      return i === candles.length - 1 ? { time: c.time, value: c.volume, color: upOf(c) ? colors.up : colors.down } : { time: c.time };
     });
     const spot: VolumeColumn[] = [];
     for (const c of candles) {
@@ -84,4 +86,13 @@ export function buildVolumeView(
     if (values[i] !== null && (ratios[i] ?? 0) > spikeX) labels.push({ time: c.time, value: values[i]!, text: VOLUME_SOURCE_SPIKE_TEXT[source], color: SOURCE_SPIKE_COLOR });
   });
   return { main, spot: [], labels, runningMissing: candles.length > 0 && values.at(-1) === null };
+}
+
+/**
+ * Mốc bắt đầu có volume nhiều sàn khi chart có nhiều nến đã đóng hơn phần đã tải (null = phủ đủ).
+ * `chartBars` gồm cả nến đang chạy.
+ */
+export function aggCoverageFrom(chartBars: number, aggBars: readonly VolumeAggBar[]): number | null {
+  if (!aggBars.length || chartBars - 1 <= aggBars.length) return null;
+  return aggBars[0]!.time;
 }
