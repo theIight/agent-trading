@@ -185,7 +185,7 @@ server.registerTool(
     title: 'Order flow Binance',
     description:
       'Order flow do server tự tính từ Binance spot (chỉ khi get_analysis_request có orderflow): tường thanh khoản trong sổ lệnh kèm thời gian đứng, ' +
-      'POC/HVN/LVN 24h, CVD và phân kỳ, lệnh market lớn, vùng hấp thụ. Giá là Binance spot, chưa quy đổi (chart là futures). Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
+      'POC/HVN/LVN 24h, CVD và phân kỳ, lệnh market lớn, vùng hấp thụ. Giá đã quy đổi về giá chart (spot − basis trung vị 60 phút). Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
     inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
   },
   async ({ analysisId: idArg }) => {

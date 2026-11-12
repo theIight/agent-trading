@@ -1,5 +1,5 @@
 import type { WallSegment } from '@wca/shared';
-import { buildSnapshot, findWallSegments, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
+import { basisByMinute, buildSnapshot, findWallSegments, medianBasis, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
 import type { BookSample } from './localBook.ts';
 import { BINANCE_SPOT_REST, BookCollector, type CollectorStatus } from './collector.ts';
 
@@ -18,6 +18,10 @@ export interface BinanceOrderflowOptions {
   absorptionQty: Record<string, number>;
   /** Ngưỡng khối lượng tối thiểu của tường (lịch sử tường), theo symbol. */
   wallMin?: Record<string, number>;
+  /** Offset dự phòng giá spot − giá chart theo symbol (khi không tính được basis). */
+  offsets?: Record<string, number>;
+  /** Nến 1m futures (giá chart) ĐÃ ĐÓNG ~24h, để tính basis; không có → dùng offset dự phòng. */
+  futuresCandles?: (symbol: string) => Promise<readonly { time: number; close: number }[]>;
   fetchImpl?: typeof fetch;
   now?: () => number;
 }
@@ -50,7 +54,7 @@ export const LIVE_CACHE_SEC = 10;
 export const WALL_HISTORY_H = 24;
 
 export interface LiveOrderflowSnapshot extends BinanceOrderflowSnapshot {
-  /** Lịch sử tường 24h (giá Binance spot). */
+  /** Lịch sử tường 24h (giá chart = spot − basis: hiện tại cho tường còn tồn tại, lúc kết thúc cho tường đã hết). */
   wallSegments: WallSegment[];
 }
 
@@ -62,6 +66,8 @@ export class BinanceOrderflow {
   private readonly liveCache = new Map<string, { at: number; snap: Promise<LiveOrderflowSnapshot> }>();
   /** Mẫu sổ lệnh đã parse theo symbol: chỉ đọc thêm mẫu mới từ SQLite. */
   private readonly sampleCache = new Map<string, BookSample[]>();
+  /** Nến futures đã đóng theo symbol, cache theo phút đóng gần nhất. */
+  private readonly futCache = new Map<string, { minute: number; candles: readonly { time: number; close: number }[] }>();
   /** Số request klines đã gọi (để test cache). */
   klineRequests = 0;
 
@@ -127,6 +133,33 @@ export class BinanceOrderflow {
     return merged;
   }
 
+  /**
+   * Basis spot − chart tại thời điểm bất kỳ: trung vị 60 phút `close spot − close futures` (chỉ đổi khi có nến đóng mới).
+   * Thiếu dữ liệu → offset dự phòng (`fallback = true`).
+   */
+  async basisFn(symbol: string, now: number): Promise<{ at: (t: number) => number; current: number; fallback: boolean }> {
+    const fallbackValue = this.opts.offsets?.[symbol] ?? 0;
+    let fut: readonly { time: number; close: number }[] = [];
+    if (this.opts.futuresCandles) {
+      const minute = Math.floor(now / 60) * 60;
+      const hit = this.futCache.get(symbol);
+      if (hit && hit.minute === minute) fut = hit.candles;
+      else {
+        try {
+          fut = await this.opts.futuresCandles(symbol);
+          this.futCache.set(symbol, { minute, candles: fut });
+        } catch {
+          fut = hit?.candles ?? [];
+        }
+      }
+    }
+    const byMin = basisByMinute(await this.spotCandles(symbol, now), fut);
+    const lastClosed = Math.floor(now / 60) * 60 - 60;
+    const cur = medianBasis(byMin, lastClosed);
+    const current = cur ?? fallbackValue;
+    return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed)) ?? current, current, fallback: cur === null };
+  }
+
   /** Lịch sử tường 24h (chưa quy đổi giá). */
   async wallSegments(symbol: string, now: number): Promise<WallSegment[]> {
     const candles = await this.spotCandles(symbol, now);
@@ -143,8 +176,13 @@ export class BinanceOrderflow {
     if (hit && now - hit.at < LIVE_CACHE_SEC) return hit.snap;
     const snap = appPrice().then(async p => {
       const base = await this.snapshot(symbol, p);
+      const basis = await this.basisFn(symbol, base.asOf);
       const segs = await this.wallSegments(symbol, base.asOf);
-      const wallSegments = segs.map(sg => ({ ...sg, price: sg.sourcePrice }));
+      // Tường đã kết thúc: basis lúc kết thúc → giá cố định mãi; tường còn tồn tại: basis hiện tại.
+      const wallSegments = segs.map(sg => ({
+        ...sg,
+        price: Math.round((sg.sourcePrice - (sg.end === null ? base.offset : basis.at(sg.end))) * 100) / 100,
+      }));
       return { ...base, wallSegments };
     });
     this.liveCache.set(symbol, { at: now, snap });
@@ -152,14 +190,15 @@ export class BinanceOrderflow {
     return snap;
   }
 
-  /** Bản tóm tắt order flow tại `now`; `appPrice` = giá chart lúc đó (chỉ để tham khảo, không quy đổi). */
+  /** Bản tóm tắt order flow tại `now`; quy đổi bằng basis ổn định; `appPrice` = giá chart lúc đó (tham khảo). */
   async snapshot(symbol: string, appPrice: number | null): Promise<BinanceOrderflowSnapshot> {
     const src = this.opts.collectors[symbol];
     if (!src) throw new Error(`Chưa bật order flow Binance cho ${symbol}`);
     const now = this.now();
     const candles = await this.spotCandles(symbol, now);
     const bucket = this.opts.buckets[symbol] ?? 10;
-    return buildSnapshot({
+    const basis = await this.basisFn(symbol, now);
+    const snap = buildSnapshot({
       symbol,
       venue: 'Binance spot',
       unit: sizeUnit(symbol),
@@ -170,6 +209,9 @@ export class BinanceOrderflow {
       trades: src.trades(now - TRADE_WINDOW_H * 3600, now),
       appPrice,
       absorptionMinQty: this.opts.absorptionQty[symbol] ?? Number.POSITIVE_INFINITY,
+      offset: basis.current,
     });
+    if (basis.fallback) snap.notes.push(`Chưa đủ dữ liệu nến futures để tính basis — dùng offset dự phòng ${basis.current}`);
+    return snap;
   }
 }

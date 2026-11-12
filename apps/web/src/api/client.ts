@@ -84,6 +84,8 @@ export interface LiveOrderflow {
   asOf: number;
   historyMin: number;
   connected: boolean;
+  /** Basis spot − chart đã dùng (trung vị 60 phút). */
+  offset: number;
   notes: string[];
   levels: OrderflowLevel[];
   /** Lịch sử tường 24h (giá đã quy đổi). */

@@ -531,7 +531,7 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
       )}
       {binance ? (
         <div className="muted note">
-          Giá Binance spot (chưa quy đổi){of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>}
+          Binance spot, quy đổi về giá chart bằng basis {of.offset ?? 0} (trung vị 60 phút){of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>}
           {of.historyMin !== undefined && <> · lịch sử sổ lệnh {Math.round(of.historyMin)} phút</>}
         </div>
       ) : (

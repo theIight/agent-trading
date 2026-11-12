@@ -111,6 +111,8 @@ export async function buildApp(deps: AppDeps = {}) {
         buckets: cfg.orderflowBuckets,
         absorptionQty: cfg.orderflowAbsorb,
         wallMin: cfg.orderflowWallMin,
+        offsets: cfg.orderflowOffsets,
+        futuresCandles: symbol => klines.getKlines({ symbol, tf: '1m', limit: 1440, closedOnly: true }).then(r => r.candles),
       })
     : undefined;
   for (const c of collectors) c.start();

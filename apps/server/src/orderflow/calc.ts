@@ -284,8 +284,10 @@ export interface BinanceOrderflowSnapshot {
   asOf: number;
   historyMin: number;
   spotPrice: number;
-  /** Giá chart của app (futures) lúc lấy, chỉ để tham khảo; null = không lấy được. Các mức giữ nguyên giá spot. */
+  /** Giá chart của app (futures) lúc lấy; null = không lấy được (chỉ để tham khảo). */
   appPrice: number | null;
+  /** Basis (giá spot − giá chart) đã dùng: `price = sourcePrice − offset`. */
+  offset: number;
   bucket: number;
   unit: string;
   walls: Wall[];
@@ -308,6 +310,8 @@ export interface SnapshotInput {
   candles: readonly SpotCandle[];
   trades: readonly BigTrade[];
   appPrice: number | null;
+  /** Basis spot − chart dùng để quy đổi (trung vị 60 phút, hoặc offset dự phòng). */
+  offset?: number;
   /** Ngưỡng hấp thụ (tổng khối lượng chủ động tại một bucket). */
   absorptionMinQty: number;
   wallOptions?: WallOptions;
@@ -319,8 +323,9 @@ export const MIN_HISTORY_MIN = 30;
 export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
   const latest = inp.samples.at(-1);
   const spotPrice = latest?.mid ?? inp.candles.at(-1)?.close ?? 0;
-  // Giữ nguyên giá Binance spot (không quy đổi theo chênh lệch spot/futures).
-  const toApp = (p: number) => r2(p);
+  // Quy đổi spot → chart bằng basis ổn định (không đo theo từng lần: đo lệch pha làm vạch nhảy).
+  const offset = inp.offset ?? 0;
+  const toApp = (p: number) => r2(p - offset);
   const historyMin = latest ? r2((latest.t - inp.samples[0]!.t) / 60) : 0;
   const notes: string[] = [];
   if (!latest) notes.push('Chưa có dữ liệu sổ lệnh (collector chưa chạy hoặc mất kết nối) — không có tường thanh khoản');
@@ -389,6 +394,7 @@ export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
     historyMin,
     spotPrice,
     appPrice: inp.appPrice,
+    offset,
     bucket: inp.bucket,
     unit: inp.unit,
     walls,
@@ -508,4 +514,25 @@ export function findWallSegments(samples: readonly BookSample[], candles: readon
     }
   }
   return out.sort((a, b) => a.start - b.start);
+}
+
+/** Chênh lệch `close spot − close futures` theo phút (unix giây của nến), chỉ các phút có cả hai. */
+export function basisByMinute(spot: readonly { time: number; close: number }[], fut: readonly { time: number; close: number }[]): Map<number, number> {
+  const f = new Map(fut.map(c => [c.time, c.close]));
+  const out = new Map<number, number>();
+  for (const c of spot) {
+    const fc = f.get(c.time);
+    if (fc !== undefined) out.set(c.time, c.close - fc);
+  }
+  return out;
+}
+
+/** Số cặp phút tối thiểu để tin trung vị basis. */
+export const BASIS_MIN_SAMPLES = 10;
+
+/** Trung vị basis của `windowMin` nến 1m mở trong (at − windowMin·60, at]; thiếu dữ liệu → null. */
+export function medianBasis(byMinute: ReadonlyMap<number, number>, at: number, windowMin = 60): number | null {
+  const xs: number[] = [];
+  for (const [t, d] of byMinute) if (t <= at && t > at - windowMin * 60) xs.push(d);
+  return xs.length >= BASIS_MIN_SAMPLES ? r2(median(xs)) : null;
 }

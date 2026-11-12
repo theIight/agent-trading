@@ -15,7 +15,9 @@ import {
   cvdStats,
   findAbsorption,
   findWalls,
+  basisByMinute,
   findWallSegments,
+  medianBasis,
   profileBucket,
   volumeProfile,
   type SpotCandle,
@@ -139,20 +141,21 @@ describe('buildSnapshot', () => {
   const s = samples(60, () => ({ bids: [[72800, 50]], asks: [[73200, 30]] }));
   const candles = Array.from({ length: 300 }, (_, i) => c(1_000_000 - 18_000 + i * 60, 72950, 73050, 5, 2.5));
 
-  it('giữ nguyên giá Binance spot (không quy đổi theo giá chart)', () => {
+  it('quy đổi về giá chart bằng basis truyền vào', () => {
     const snap = buildSnapshot({
       symbol: 'BTCUSDT', venue: 'Binance spot', unit: 'BTC', now: s.at(-1)!.t, bucket: 10, samples: s, candles, trades: [],
-      appPrice: 72966, absorptionMinQty: 25,
+      appPrice: 72966, absorptionMinQty: 25, offset: 33,
     });
     const bid = snap.levels.find(l => l.kind === 'BID_WALL')!;
-    expect(bid).toMatchObject({ sourcePrice: 72800, price: 72800, size: 50, sizeSource: 'BOOK', persistMin: 60 });
-    expect(snap.levels.every(l => l.price === l.sourcePrice)).toBe(true);
+    expect(bid).toMatchObject({ sourcePrice: 72800, price: 72767, size: 50, sizeSource: 'BOOK', persistMin: 60 });
+    expect(snap.levels.every(l => l.price === Math.round((l.sourcePrice! - 33) * 100) / 100)).toBe(true);
+    expect(snap.offset).toBe(33);
     expect(snap.levels.find(l => l.kind === 'POC')?.sizeSource).toBe('VOLUME');
     expect(snap.notes).toEqual([]);
     const text = formatOrderflowForAgent(snap);
-    expect(text).toContain('giá Binance SPOT (chưa quy đổi)');
-    expect(text).toContain('chênh khoảng 34');
-    expect(text).toContain('Tường mua 72800');
+    expect(text).toContain('giá Binance spot − basis 33');
+    expect(text).toContain('chênh lệch thực tế 34');
+    expect(text).toContain('Tường mua 72767');
   });
 
   it('chưa có sổ lệnh → ghi chú, không có tường', () => {
@@ -285,7 +288,7 @@ describe('validateBinanceOrderflow', () => {
     };
     const r = validateBinanceOrderflow(agent, ctx);
     expect(r.orderflow).toMatchObject({ source: 'binance', summary: 'Tường mua dày bên dưới.', cvd: 'CVD 24h +10 BTC', lastPrices: [] });
-    expect(r.orderflow.offset).toBeUndefined();
+    expect(r.orderflow.offset).toBe(0);
     expect(r.orderflow.levels).toEqual(snapshot.levels);
     expect(r.warnings).toHaveLength(2);
   });
@@ -489,6 +492,67 @@ describe('order flow live cho chart', () => {
     expect(live.levels.find(l => l.kind === 'BID_WALL')).toMatchObject({ sourcePrice: 80, price: 80 });
     expect(live.wallSegments).toEqual([expect.objectContaining({ side: 'BID', sourcePrice: 80, price: 80, status: 'active', end: null, peakSize: 50 })]);
     await expect(service.orderflowLive('ETHUSDT')).rejects.toThrow(/Chưa bật/);
+  });
+});
+
+describe('basis spot − chart ổn định', () => {
+  const T = 1_794_400_020 - (1_794_400_020 % 60);
+  // 120 phút: basis 30 ở 60 phút đầu, 40 ở 60 phút sau; nhiễu ±5 ở phút lẻ.
+  const spot = Array.from({ length: 120 }, (_, i) => ({ time: T + i * 60, close: 70000 + (i < 60 ? 30 : 40) + (i % 2 ? 5 : -5) + (i % 7 === 0 ? 0 : 0) }));
+  const fut = spot.map(c => ({ time: c.time, close: 70000 }));
+
+  it('trung vị 60 phút, thiếu dữ liệu → null', () => {
+    const m = basisByMinute(spot, fut);
+    expect(m.size).toBe(120);
+    expect(medianBasis(m, T + 59 * 60)).toBe(30);
+    expect(medianBasis(m, T + 119 * 60)).toBe(40);
+    expect(medianBasis(m, T + 5 * 60)).toBeNull(); // mới 6 cặp
+  });
+
+  it('tường đã kết thúc dùng basis lúc kết thúc; tường còn tồn tại và các mức dùng basis hiện tại; nến futures cache theo phút', async () => {
+    const now = T + 120 * 60 + 30;
+    const spotRows = spot.map(c => [c.time * 1000, '1', '1', '1', String(c.close), '1', 0, '0', 1, '0.5', '0', '0']);
+    let futCalls = 0;
+    const samplesData: BookSample[] = Array.from({ length: 6 * 110 }, (_, i) => ({
+      t: T + 600 + i * 10,
+      mid: 70035,
+      bids: [[69900, 1], [69910, 1], [69920, 1], ...(i < 6 * 30 ? ([[69800, 40]] as [number, number][]) : []), [69700, 30]],
+      asks: [[70100, 1], [70110, 1], [70120, 1]],
+    }));
+    const of = new BinanceOrderflow({
+      collectors: {
+        BTCUSDT: {
+          samples: (from, to) => samplesData.filter(x => x.t >= from && x.t <= to),
+          rawSamples: (from, to) => samplesData.filter(x => x.t >= from && x.t <= to),
+          trades: () => [],
+          status: () => ({ symbol: 'BTCUSDT', connected: true, synced: true, since: null, lastSampleAt: null, historyMin: 0, spotPrice: null }),
+        },
+      },
+      buckets: { BTCUSDT: 10 },
+      absorptionQty: {},
+      wallMin: { BTCUSDT: 8 },
+      offsets: { BTCUSDT: 33 },
+      futuresCandles: async () => (futCalls++, fut),
+      fetchImpl: (async () => new Response(JSON.stringify(spotRows))) as typeof fetch,
+      now: () => now,
+    });
+    const live = await of.live('BTCUSDT', async () => 70000);
+    expect(live.offset).toBe(40);
+    expect(live.notes.join(' ')).not.toMatch(/dự phòng/);
+    const ended = live.wallSegments.find(sg => sg.sourcePrice === 69800)!;
+    expect(ended.end).toBeLessThan(T + 60 * 60); // kết thúc trong giờ đầu → basis 30
+    expect(ended.price).toBe(69770);
+    const active = live.wallSegments.find(sg => sg.sourcePrice === 69700)!;
+    expect(active).toMatchObject({ status: 'active', price: 69660 });
+    await of.basisFn('BTCUSDT', now);
+    expect(futCalls).toBe(1); // cùng phút → dùng cache
+  });
+
+  it('không có nến futures → offset dự phòng + ghi chú', async () => {
+    const { service } = setup(async () => ({ ok: true }));
+    const live = await service.orderflowLive('BTCUSDT');
+    expect(live.offset).toBe(0);
+    expect(live.notes.join(' ')).toMatch(/offset dự phòng/);
   });
 });
 

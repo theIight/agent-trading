@@ -111,6 +111,8 @@ export const config = {
   orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8 }),
   /** Khối lượng tối thiểu để một mức tính là tường trong lịch sử tường trên chart, theo `ORDERFLOW_WALL_MIN_<SYMBOL>`. */
   orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8 }),
+  /** Offset dự phòng giá spot − giá chart (futures) khi chưa tính được basis (trung vị 60 phút), theo `ORDERFLOW_OFFSET_<SYMBOL>`. */
+  orderflowOffsets: symbolNums('ORDERFLOW_OFFSET_', { BTCUSDT: 33 }),
   orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
   orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
