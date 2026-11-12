@@ -34,6 +34,7 @@ export function validateBinanceOrderflow(of: Orderflow | undefined, ctx: Binance
     offset: snap.offset,
     asOf: snap.asOf,
     historyMin: snap.historyMin,
+    ...(snap.liquidation ? { liquidation: snap.liquidation.slice(0, 2000) } : {}),
   };
   return { orderflow, warnings };
 }

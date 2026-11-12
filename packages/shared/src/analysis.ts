@@ -218,6 +218,8 @@ export const orderflowSchema = z.object({
   asOf: z.number().optional(),
   /** Server điền (Binance): số phút lịch sử sổ lệnh đã ghi tới lúc lấy. */
   historyMin: z.number().optional(),
+  /** Server điền (Binance, BTC): tóm tắt thanh lý 24h + heatmap mức thanh lý ước tính. */
+  liquidation: z.string().max(2000).optional(),
 });
 
 export const topDownStepSchema = z.object({

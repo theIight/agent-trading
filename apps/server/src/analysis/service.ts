@@ -7,6 +7,8 @@ import {
   bookmapInstrumentLabel,
   buildTfPlan,
   isRunnerId,
+  isTimeframe,
+  tfSeconds,
   normalizeSymbol,
   normalizeTfInput,
   type RunnerId,
@@ -27,6 +29,7 @@ import { imageStatus, inspectImage, type BookmapImageFile, type BookmapImageStat
 import { referencedTfs, validateSubmission } from '../validate/index.ts';
 import type { AnalysisRepo } from './repo.ts';
 import type { BinanceOrderflow } from '../orderflow/binanceOrderflow.ts';
+import type { LiquidationService } from '../liquidation/service.ts';
 import { cvdText, type BinanceOrderflowSnapshot } from '../orderflow/calc.ts';
 
 export interface StartInput {
@@ -73,6 +76,7 @@ export interface ServiceOptions {
   bookmap?: BookmapOptions;
   /** Không có → không có order flow Binance. */
   binanceOrderflow?: BinanceOrderflow;
+  liquidation?: LiquidationService;
 }
 
 /** Không có ngưỡng cho symbol → coi như không giới hạn (không cảnh báo lệch offset). */
@@ -277,6 +281,15 @@ export class AnalysisService {
     };
   }
 
+  /** Thanh lý cho chart (bong bóng theo nến `tf` + heatmap ước tính). */
+  async liquidationLive(symbol: string, tf: string, heatmapAsOf?: number) {
+    const sym = normalizeSymbol(symbol);
+    const liq = this.opts.liquidation;
+    if (!liq?.has(sym)) throw new ServiceError(`Chưa bật thanh lý cho ${symbol}`, 404);
+    if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
+    return liq.live(sym, tfSeconds(tf), heatmapAsOf);
+  }
+
   /** Giá chart hiện tại (close nến 1m đang chạy); lỗi → null. */
   private chartPrice(symbol: string): Promise<number | null> {
     return this.klines
@@ -311,6 +324,14 @@ export class AnalysisService {
     if (!of) throw new Error('Order flow Binance chưa bật');
     const appPrice = await this.chartPrice(symbol);
     const snap = await of.snapshot(symbol, appPrice);
+    const liq = this.opts.liquidation;
+    if (liq?.has(symbol)) {
+      try {
+        snap.liquidation = (await liq.summaryText(symbol, appPrice)) ?? undefined;
+      } catch (err) {
+        snap.notes.push(`Không lấy được dữ liệu thanh lý: ${(err as Error).message}`);
+      }
+    }
     fs.writeFileSync(this.orderflowSnapshotPath(id), JSON.stringify(snap));
     return snap;
   }

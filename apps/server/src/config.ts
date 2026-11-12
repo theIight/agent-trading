@@ -39,6 +39,18 @@ function orderflowSources(defaults: Record<string, OrderflowSourceCfg>): Record<
   return out;
 }
 
+/** `LIQ_OKX_INST_BTCUSDT=BTC-USDT-SWAP:0.01`; giá trị rỗng = tắt OKX cho symbol. */
+function liqOkxInst(defaults: Record<string, { instId: string; ctVal: number }>): Record<string, { instId: string; ctVal: number } | undefined> {
+  const out: Record<string, { instId: string; ctVal: number } | undefined> = { ...defaults };
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith('LIQ_OKX_INST_') || raw === undefined) continue;
+    const sym = key.slice('LIQ_OKX_INST_'.length).toUpperCase();
+    const m = /^([A-Z0-9-]+):([\d.]+)$/i.exec(raw.trim());
+    out[sym] = m && Number(m[2]) > 0 ? { instId: m[1]!.toUpperCase(), ctVal: Number(m[2]) } : undefined;
+  }
+  return out;
+}
+
 function symbolNums(prefix: string, defaults: Record<string, number>): Record<string, number> {
   const out = { ...defaults };
   for (const [key, raw] of Object.entries(process.env)) {
@@ -132,6 +144,19 @@ export const config = {
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
   /** Chu kỳ snapshot lại theo symbol (`ORDERFLOW_RESYNC_MIN_<SYMBOL>`): futures chỉ chụp được 1000 mức nên chụp lại thường xuyên để vùng phủ theo giá. */
   orderflowResyncMinBySymbol: symbolNums('ORDERFLOW_RESYNC_MIN_', { XAUUSD: 5 }),
+  /** Thanh lý (bong bóng thật Binance + OKX, heatmap ước tính từ OI Binance) cho các symbol Binance Futures này. Rỗng = tắt. */
+  liqSymbols: (process.env.LIQ_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** `LIQ_OKX_INST_<SYMBOL>=BTC-USDT-SWAP:0.01` (instId:ctVal); rỗng = chỉ Binance. */
+  liqOkxInst: liqOkxInst({ BTCUSDT: { instId: 'BTC-USDT-SWAP', ctVal: 0.01 } }),
+  /** Ngưỡng cụm thanh lý (đồng gốc) ở khung 1m, khung lớn hơn × √(phút), theo `LIQ_MIN_QTY_<SYMBOL>`. */
+  liqMinQty: symbolNums('LIQ_MIN_QTY_', { BTCUSDT: 0.5 }),
+  /** Bucket giá heatmap, theo `LIQ_BUCKET_<SYMBOL>`. */
+  liqBuckets: symbolNums('LIQ_BUCKET_', { BTCUSDT: 50 }),
+  /** Phân bố đòn bẩy giả định `lev:weight,...`. */
+  liqLeverage: process.env.LIQ_LEVERAGE,
+  /** Ký quỹ duy trì giả định. */
+  liqMmr: Number(process.env.LIQ_MMR) > 0 ? Number(process.env.LIQ_MMR) : 0.004,
+  liqRetainH: int('LIQ_RETAIN_H', 72),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

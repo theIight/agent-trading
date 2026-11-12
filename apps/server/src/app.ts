@@ -25,6 +25,9 @@ import { ClaudeCodeRunner } from './runner/claudeCodeRunner.ts';
 import type { AgentRunner } from './runner/types.ts';
 import { BinanceOrderflow } from './orderflow/binanceOrderflow.ts';
 import { BookCollector } from './orderflow/collector.ts';
+import { LiquidationCollector } from './liquidation/collector.ts';
+import { LiquidationService } from './liquidation/service.ts';
+import { parseLeverage } from './liquidation/model.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -120,6 +123,28 @@ export async function buildApp(deps: AppDeps = {}) {
     : undefined;
   for (const c of collectors) c.start();
 
+  const liqCollectors =
+    deps.orderflow === false
+      ? []
+      : cfg.liqSymbols.map(
+          symbol =>
+            new LiquidationCollector({ symbol, okxInst: cfg.liqOkxInst[symbol], retainH: cfg.liqRetainH, db, log: msg => console.log(msg) }),
+        );
+  const liquidation = liqCollectors.length
+    ? new LiquidationService({
+        db,
+        collectors: Object.fromEntries(liqCollectors.map(c => [c.symbol, c])),
+        buckets: cfg.liqBuckets,
+        minQty: cfg.liqMinQty,
+        tiers: parseLeverage(cfg.liqLeverage),
+        mmr: cfg.liqMmr,
+        retainH: cfg.liqRetainH,
+        log: msg => console.log(msg),
+      })
+    : undefined;
+  for (const c of liqCollectors) c.start();
+  liquidation?.start();
+
   const service = new AnalysisService(repo, klines, runners, {
     defaultRunner: cfg.agentRunner,
     instrumentOf: symbol => router.instrument(symbol),
@@ -129,6 +154,7 @@ export async function buildApp(deps: AppDeps = {}) {
     minRiskReward: cfg.setupMinRr,
     bookmap: { images: cfg.bookmapImages, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
     binanceOrderflow,
+    liquidation,
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -152,12 +178,15 @@ export async function buildApp(deps: AppDeps = {}) {
       offsets: Object.fromEntries(service.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
     } satisfies BookmapUiConfig,
     orderflow: { binanceSymbols: service.orderflowSymbols },
+    liquidation: { symbols: liquidation?.symbols ?? [] },
   }));
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);
 
   app.addHook('onClose', async () => {
     for (const c of collectors) c.stop();
+    for (const c of liqCollectors) c.stop();
+    liquidation?.stop();
     db.close();
   });
   return { app, klines, db, service, repo, internalToken };

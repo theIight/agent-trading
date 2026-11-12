@@ -28,6 +28,7 @@ export function formatOrderflowForAgent(s: BinanceOrderflowSnapshot): string {
     lines.push('', `Lệnh market lớn nhất 4 giờ qua (bên chủ động):`);
     for (const t of s.bigTrades) lines.push(`- ${iso(t.t)} ${t.side === 'BUY' ? 'MUA' : 'BÁN'} ${t.qty} ${s.unit} @ ${toApp(t.price)}`);
   }
+  if (s.liquidation) lines.push('', s.liquidation);
   lines.push(
     '',
     'Cách dùng: order flow chỉ để xác nhận/bác bỏ kịch bản Wyckoff (spring/test/upthrust, hấp thụ, tường chặn). Không dùng làm toạ độ entry/SL/TP trừ khi trùng cấu trúc giá. ' +

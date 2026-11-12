@@ -543,6 +543,12 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
         <div className="muted note">
           {symbol === 'XAUUSD' ? 'Binance Futures XAUUSDT perp' : 'Binance spot'}, quy đổi về giá chart bằng basis {of.offset ?? 0} (trung vị 60 phút){of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>}
           {of.historyMin !== undefined && <> · lịch sử sổ lệnh {Math.round(of.historyMin)} phút</>}
+          {of.liquidation && (
+            <details className="liq-summary">
+              <summary>Thanh lý + heatmap ước tính lúc phân tích</summary>
+              <pre>{of.liquidation}</pre>
+            </details>
+          )}
         </div>
       ) : (
       <div className="muted note">

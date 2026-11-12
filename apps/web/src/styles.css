@@ -150,6 +150,7 @@ button, input { font: inherit; color: inherit; }
   pointer-events: none;
 }
 .of-chart-status.down { color: var(--down); }
+.liq-chart-status { top: 74px; }
 
 /* ---------- Panel phân tích ---------- */
 .panel {
@@ -383,3 +384,7 @@ button, input { font: inherit; color: inherit; }
 .of-ask { color: rgba(239, 83, 80, 0.85); }
 .of-bid { color: rgba(38, 166, 154, 0.9); }
 .of-poc { color: rgba(186, 104, 200, 0.9); }
+
+.liq-summary { margin-top: 6px; }
+.liq-summary summary { cursor: pointer; }
+.liq-summary pre { white-space: pre-wrap; font: inherit; margin: 4px 0 0; }

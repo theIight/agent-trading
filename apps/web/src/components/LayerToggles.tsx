@@ -1,13 +1,15 @@
 import { LAYER_KEYS, LAYER_LABELS } from '../overlays/model.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
+import { useLiquidationStore } from '../store/useLiquidationStore.ts';
 import { useOrderflowStore } from '../store/useOrderflowStore.ts';
 
 export function LayerToggles() {
   const { current, layers, toggleLayer } = useAnalysisStore();
   const live = useOrderflowStore(s => s.data);
-  if (!current && !live) return null;
-  // Chưa có phân tích: chỉ có toggle Order flow (live).
-  const keys = current ? LAYER_KEYS.filter(k => k !== 'orderflow' || current.orderflow || live) : (['orderflow'] as const);
+  const { data: liq, showBubbles, showHeatmap, toggleBubbles, toggleHeatmap } = useLiquidationStore();
+  if (!current && !live && !liq) return null;
+  // Chưa có phân tích: chỉ có toggle Order flow (live) và thanh lý.
+  const keys = current ? LAYER_KEYS.filter(k => k !== 'orderflow' || current.orderflow || live) : live ? (['orderflow'] as const) : [];
   return (
     <div className="layer-toggles" role="group" aria-label="Lớp hiển thị">
       {keys.map(k => (
@@ -16,6 +18,18 @@ export function LayerToggles() {
           {LAYER_LABELS[k]}
         </label>
       ))}
+      {liq && (
+        <>
+          <label title="Thanh lý đã xảy ra (Binance + OKX; Binance chỉ đẩy 1 lệnh/giây nên đếm thiếu). Đỏ = long bị thanh lý, xanh = short bị thanh lý">
+            <input type="checkbox" checked={showBubbles} onChange={toggleBubbles} />
+            Thanh lý
+          </label>
+          <label title="Mức thanh lý ƯỚC TÍNH từ open interest Binance (mô hình, đòn bẩy giả định) — không phải dữ liệu thật">
+            <input type="checkbox" checked={showHeatmap} onChange={toggleHeatmap} />
+            Heatmap thanh lý <span className="muted">(ước tính)</span>
+          </label>
+        </>
+      )}
     </div>
   );
 }

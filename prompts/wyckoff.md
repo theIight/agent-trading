@@ -71,6 +71,9 @@ Server tự ghi sổ lệnh và lệnh khớp của Binance (BTC: spot; vàng: F
 - **CVD** (mua chủ động − bán chủ động) và **phân kỳ**: giá xuống đáy mới mà CVD không xuống = lực bán yếu / hấp thụ (ủng hộ Spring/Test); giá lên đỉnh mới mà CVD không lên = ủng hộ UT/UTAD.
 - **Hấp thụ / lệnh market lớn**: lệnh bán lớn ở biên dưới range mà giá giữ = cầu hấp thụ cung (nỗ lực không có kết quả).
 - **Áp vào Wyckoff**: như mục Bookmap (SL ngoài vùng thanh khoản dày, TP trước tường / tại POC), nhưng entry/SL/TP vẫn lấy từ dữ liệu nến.
+- **Thanh lý (BTC)** — nếu `get_orderflow` có mục thanh lý:
+  - *Thanh lý thật* (Binance + OKX, đếm thiếu): cụm long bị thanh lý dồn dập ở đáy mà giá giữ được = dấu hiệu SC/Spring (bán cưỡng bức cạn); cụm short bị thanh lý ở đỉnh = BC/UTAD (mua cưỡng bức). Thanh lý lớn nhưng giá đi tiếp = xu hướng còn lực.
+  - *Heatmap mức thanh lý ƯỚC TÍNH* (mô hình từ OI, đòn bẩy giả định, sai số vài trăm $): vùng dày là thanh khoản có thể bị săn — giá hay bị hút tới rồi đảo chiều. Chỉ dùng để xác nhận hoặc làm mục tiêu tham khảo; **không** dùng làm entry/SL/TP, không đổi bối cảnh khung lớn. Có thể nhắc ngắn trong `orderflow.summary`.
 - **Nộp `orderflow`** chỉ gồm `summary` (1–3 câu tiếng Việt) và `cvd`. **Không** gửi `levels`, `lastPrices`: server tự gắn các mức đã tính.
 
 # Quy tắc toạ độ (validator sẽ kiểm tra)

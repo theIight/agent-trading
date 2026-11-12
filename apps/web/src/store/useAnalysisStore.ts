@@ -74,6 +74,8 @@ interface AnalysisState {
   useBookmap: boolean;
   /** Symbol có order flow Binance (server tự tính). */
   orderflowSymbols: string[];
+  /** Symbol bật thanh lý (bong bóng + heatmap). */
+  liquidationSymbols: string[];
   /** Checkbox "Dùng order flow Binance". */
   useOrderflow: boolean;
   /** Offset người dùng sửa theo symbol (không có = mặc định server). */
@@ -123,6 +125,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   bookmapConfig: null,
   useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
   orderflowSymbols: [],
+  liquidationSymbols: [],
   useOrderflow: load<boolean>(USE_ORDERFLOW_KEY, true),
   bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
@@ -157,7 +160,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   loadConfig: async () => {
     try {
       const cfg = await fetchConfig();
-      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [] });
+      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [], liquidationSymbols: cfg.liquidation?.symbols ?? [] });
     } catch {
       /* server chưa chạy */
     }

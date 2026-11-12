@@ -6,6 +6,7 @@ import { buildDemoAnalysis, type DemoVariant } from '../overlays/demoAnalysis.ts
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 import { useOrderflowStore } from '../store/useOrderflowStore.ts';
+import { useLiquidationStore } from '../store/useLiquidationStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
 
 function fmt(n: number): string {
@@ -37,7 +38,9 @@ export function ChartView({ onStatus, onReady }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [instrument, setInstrument] = useState<InstrumentInfo | null>(null);
   const { symbol, tf, theme } = useAppStore();
-  const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols } = useAnalysisStore();
+  const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols, liquidationSymbols } = useAnalysisStore();
+  const { data: liq, error: liqError, showBubbles, showHeatmap, watch: watchLiquidation } = useLiquidationStore();
+  const liqSymbol = liquidationSymbols.includes(symbol) ? symbol : null;
   const { data: liveOf, error: liveOfError, watch: watchOrderflow } = useOrderflowStore();
   const liveOfSymbol = orderflowSymbols.includes(symbol) ? symbol : null;
 
@@ -100,6 +103,16 @@ export function ChartView({ onStatus, onReady }: Props) {
     overlayRef.current?.setLiveOrderflow(liveOf ? { symbol: liveOf.symbol, levels: liveOf.levels, wallSegments: liveOf.wallSegments } : null);
   }, [liveOf]);
 
+  // Thanh lý (BTC): poll theo symbol + khung đang xem.
+  useEffect(() => {
+    watchLiquidation(liqSymbol, tf);
+    return () => watchLiquidation(null, tf);
+  }, [liqSymbol, tf, watchLiquidation]);
+
+  useEffect(() => {
+    overlayRef.current?.setLiquidation(liq ? { data: liq, showBubbles, showHeatmap } : null);
+  }, [liq, showBubbles, showHeatmap]);
+
   useEffect(() => {
     overlayRef.current?.setSetupView({ selectedSetup, showReferenceSetups });
   }, [selectedSetup, showReferenceSetups]);
@@ -137,6 +150,11 @@ export function ChartView({ onStatus, onReady }: Props) {
             : !liveOf!.connected
               ? 'mất kết nối Binance — đang giữ vạch cũ'
               : `lịch sử ${Math.round(liveOf!.historyMin)} phút (cần ≥ 30 phút để tin tường)`}
+        </div>
+      )}
+      {liqSymbol && (showBubbles || showHeatmap) && (liqError || (liq && liq.notes.length > 0)) && (
+        <div className={`of-chart-status liq-chart-status ${liqError ? 'down' : 'muted'}`}>
+          Thanh lý: {liqError ? `lỗi tải (${liqError})` : liq!.notes.join(' · ')}
         </div>
       )}
       {error && <div className="chart-error">Lỗi tải dữ liệu: {error}</div>}

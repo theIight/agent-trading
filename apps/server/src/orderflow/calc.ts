@@ -298,6 +298,8 @@ export interface BinanceOrderflowSnapshot {
   /** Các mức (giá Binance spot, không quy đổi), server gắn thẳng vào kết quả. */
   levels: OrderflowLevel[];
   notes: string[];
+  /** Tóm tắt thanh lý 24h + heatmap ước tính (chỉ symbol bật thanh lý). */
+  liquidation?: string;
 }
 
 export interface SnapshotInput {

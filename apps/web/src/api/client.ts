@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -8,6 +8,14 @@ export interface ServerConfig {
   agentMaxTfs: number;
   bookmap?: BookmapUiConfig;
   orderflow?: { binanceSymbols: string[] };
+  liquidation?: { symbols: string[] };
+}
+
+/** Thanh lý cho chart: bong bóng theo nến khung `tf` + heatmap ước tính. */
+export function fetchLiquidations(symbol: string, tf: Timeframe, heatmapAsOf?: number): Promise<LiveLiquidations> {
+  const params = new URLSearchParams({ tf });
+  if (heatmapAsOf) params.set('heatmapAsOf', String(heatmapAsOf));
+  return request(`/api/liquidations/${encodeURIComponent(symbol)}?${params}`);
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {

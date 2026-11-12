@@ -90,6 +90,18 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     }
   });
 
+  /** Thanh lý: bong bóng theo nến khung `tf` + heatmap ước tính. */
+  app.get('/api/liquidations/:symbol', async (req, reply) => {
+    try {
+      const { tf, heatmapAsOf } = req.query as { tf?: string; heatmapAsOf?: string };
+      const asOf = Number(heatmapAsOf);
+      return await service.liquidationLive((req.params as { symbol: string }).symbol, tf ?? '1h', Number.isFinite(asOf) && asOf > 0 ? asOf : undefined);
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
   app.get('/api/analyses', async req => {
     const { symbol, limit } = req.query as { symbol?: string; limit?: string };
     return repo.list(symbol ? normalizeSymbol(symbol) : undefined, Math.min(Number(limit) || 50, 200));
