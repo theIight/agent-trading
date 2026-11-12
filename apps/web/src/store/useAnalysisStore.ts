@@ -24,6 +24,7 @@ const RUNNER_KEY = 'wca:runner';
 const MODELS_KEY = 'wca:runnerModels';
 const USE_BOOKMAP_KEY = 'wca:useBookmap';
 const BOOKMAP_OFFSETS_KEY = 'wca:bookmapOffsets';
+const USE_ORDERFLOW_KEY = 'wca:useBinanceOrderflow';
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -70,6 +71,10 @@ interface AnalysisState {
   bookmapConfig: BookmapUiConfig | null;
   /** Checkbox "Dùng ảnh Bookmap". */
   useBookmap: boolean;
+  /** Symbol có order flow Binance (server tự tính). */
+  orderflowSymbols: string[];
+  /** Checkbox "Dùng order flow Binance". */
+  useOrderflow: boolean;
   /** Offset người dùng sửa theo symbol (không có = mặc định server). */
   bookmapOffsets: Record<string, number>;
   /** Agent khả dụng (từ server). */
@@ -89,6 +94,7 @@ interface AnalysisState {
   setAttachScreenshot: (v: boolean) => void;
   loadConfig: () => Promise<void>;
   setUseBookmap: (v: boolean) => void;
+  setUseOrderflow: (v: boolean) => void;
   setBookmapOffset: (symbol: string, offset: number | null) => void;
   loadRunners: () => Promise<void>;
   setRunner: (r: RunnerId) => void;
@@ -115,6 +121,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   attachScreenshot: false,
   bookmapConfig: null,
   useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
+  orderflowSymbols: [],
+  useOrderflow: load<boolean>(USE_ORDERFLOW_KEY, true),
   bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
   runner: load<RunnerId | null>(RUNNER_KEY, null),
@@ -144,7 +152,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   loadConfig: async () => {
     try {
       const cfg = await fetchConfig();
-      set({ bookmapConfig: cfg.bookmap ?? null });
+      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [] });
     } catch {
       /* server chưa chạy */
     }
@@ -153,6 +161,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   setUseBookmap: useBookmap => {
     set({ useBookmap });
     save(USE_BOOKMAP_KEY, useBookmap);
+  },
+
+  setUseOrderflow: useOrderflow => {
+    set({ useOrderflow });
+    save(USE_ORDERFLOW_KEY, useOrderflow);
   },
 
   setBookmapOffset: (symbol, offset) => {
@@ -218,7 +231,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const model = runner ? runnerModels[runner] || undefined : undefined;
       // Ảnh Bookmap do server đọc từ đường dẫn cấu hình, lúc job bắt đầu chạy.
       const bookmap = bookmapEnabled(get(), symbol, info) ? { offset: bookmapOffsetOf(get(), symbol) } : undefined;
-      const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model, bookmap });
+      const orderflow = orderflowEnabled(get(), symbol) || undefined;
+      const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model, bookmap, orderflow });
       const order = sortTopDown(rec.tfs as Timeframe[]).join(' → ');
       const who = `${info?.label ?? rec.runner ?? 'agent'} · ${model ?? info?.defaultModel ?? 'model mặc định'}`;
       const steps: StepLog[] = [{ at: Date.now(), kind: 'status', message: `Bắt đầu: ${rec.symbol} · ${order} · ${who}` }];
@@ -289,6 +303,11 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 }));
+
+/** Dùng order flow Binance khi symbol có collector + tick bật. */
+export function orderflowEnabled(s: Pick<AnalysisState, 'orderflowSymbols' | 'useOrderflow'>, symbol: string): boolean {
+  return s.orderflowSymbols.includes(symbol) && s.useOrderflow;
+}
 
 /** Symbol có hỗ trợ Bookmap (theo cấu hình server). */
 export function bookmapSupported(s: Pick<AnalysisState, 'bookmapConfig'>, symbol: string): boolean {

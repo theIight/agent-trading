@@ -28,6 +28,21 @@ const MIGRATIONS: string[] = [
      error TEXT
    );`,
   `CREATE INDEX IF NOT EXISTS idx_analyses_symbol ON analyses(symbol, created_at DESC);`,
+  // Order flow Binance: mẫu sổ lệnh gom theo bucket (JSON) + lệnh khớp lớn.
+  `CREATE TABLE IF NOT EXISTS book_samples (
+     symbol TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     data TEXT NOT NULL,
+     PRIMARY KEY (symbol, t)
+   ) WITHOUT ROWID;`,
+  `CREATE TABLE IF NOT EXISTS big_trades (
+     symbol TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     price REAL NOT NULL,
+     qty REAL NOT NULL,
+     side TEXT NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_big_trades ON big_trades(symbol, t);`,
 ];
 
 export function openDb(dbPath: string): Db {
@@ -38,6 +53,7 @@ export function openDb(dbPath: string): Db {
   addColumnIfMissing(db, 'analyses', 'runner', 'TEXT');
   addColumnIfMissing(db, 'analyses', 'model', 'TEXT');
   addColumnIfMissing(db, 'analyses', 'bookmap', 'INTEGER');
+  addColumnIfMissing(db, 'analyses', 'orderflow_source', 'TEXT');
   return db;
 }
 

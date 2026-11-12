@@ -100,6 +100,18 @@ export const config = {
   bookmapTolerances: symbolNums('BOOKMAP_TOLERANCE_', { XAUUSD: 3, BTCUSDT: 60 }),
   /** Ảnh chụp cũ hơn số phút này so với lúc gửi → cảnh báo. */
   bookmapMaxAgeMin: int('BOOKMAP_MAX_AGE_MIN', 30),
+  /** Order flow từ Binance spot (server tự ghi sổ lệnh qua WebSocket), thay ảnh Bookmap cho các symbol này. Rỗng = tắt. */
+  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Bucket giá khi gom sổ lệnh, theo `ORDERFLOW_BUCKET_<SYMBOL>`. */
+  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10 }),
+  /** Tổng lệnh chủ động cùng phía trong 1 giây ≥ khối lượng này (base) → lệnh lớn, theo `ORDERFLOW_BIG_TRADE_<SYMBOL>`.
+   *  BTC spot: aggTrade đơn lẻ hiếm khi > 1 BTC; gộp theo giây ≥ 1 BTC ≈ vài chục lần/giờ. */
+  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1 }),
+  /** Tổng lệnh lớn chủ động tại một bucket (2 giờ) để xét hấp thụ, theo `ORDERFLOW_ABSORB_<SYMBOL>`. */
+  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8 }),
+  orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
+  orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
+  orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

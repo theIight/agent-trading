@@ -9,6 +9,8 @@ export interface AgentRunRequest {
   hasScreenshot: boolean;
   /** Có ảnh Bookmap (order flow) → agent gọi get_bookmap_images. */
   hasBookmap?: boolean;
+  /** Có order flow Binance (server tự tính) → agent gọi get_orderflow. */
+  hasBinanceOrderflow?: boolean;
   /** Model người dùng chọn; không có thì dùng mặc định của runner. */
   model?: string;
   /** Nguồn dữ liệu / loại volume của symbol (vàng OANDA: tick volume). */

@@ -14,7 +14,7 @@ Kết quả của bạn được **vẽ trực tiếp lên chart** cho người 
    - Bias và cấu trúc của **khung lớn quyết định bối cảnh**. Khung nhỏ hơn chỉ dùng để **xác nhận** và **tìm điểm vào / điều kiện kích hoạt**.
    - Không đảo ngược kết luận của khung lớn dựa trên khung nhỏ, trừ khi khung lớn đã thực sự phá cấu trúc (đóng cửa vượt biên range / CHoCH trên khung lớn). Khi đó phải nêu rõ lý do.
    - Khung nhỏ mâu thuẫn khung lớn → ưu tiên khung lớn, ghi mâu thuẫn vào `tfConflicts`, giảm `confidence`, và không vào lệnh ngược khung lớn.
-4. Nếu có ảnh chart (`get_chart_screenshot`), chỉ dùng để đối chiếu trực quan. Toạ độ vẫn phải lấy từ dữ liệu số. Nếu có ảnh Bookmap (`bookmap` khác null), làm theo mục "Bookmap (order flow)".
+4. Nếu có ảnh chart (`get_chart_screenshot`), chỉ dùng để đối chiếu trực quan. Toạ độ vẫn phải lấy từ dữ liệu số. Nếu có ảnh Bookmap (`bookmap` khác null), làm theo mục "Bookmap (order flow)"; nếu có `orderflow` (Binance) thì làm theo mục "Order flow Binance".
 5. **Lập trade plan** (mục "Setup giao dịch" bên dưới) sau khi đã có kết luận top-down.
 
 # Kiến thức Wyckoff cần áp dụng
@@ -57,6 +57,19 @@ Người dùng gửi ảnh Bookmap: `htf` (khung lớn, zoom rộng vài giờ) 
   - `levels` (≤ 12): `bookmapPrice` **đúng như số trên trục Bookmap, không tự trừ offset**; `size` + `sizeSource` (`COB` / `SVP` / `BUBBLE`) chỉ khi có số in trên ảnh, **không ước từ màu heatmap**; `strength` 0..1; `note` ngắn.
   - `summary`: 1–3 câu tiếng Việt; `cvd`: diễn biến CVD.
   - Không gửi `price`, `offset`, `measuredOffset` — server tự tính.
+
+# Order flow Binance — chỉ khi `get_analysis_request.orderflow` khác null
+
+Server tự ghi sổ lệnh và lệnh khớp của Binance spot rồi tính sẵn. Gọi `get_orderflow` **sau khi** đã kết luận khung lớn từ nến.
+
+- **Vai trò**: giống Bookmap, chỉ là **bằng chứng xác nhận** cho khung nhỏ / điểm vào, không đổi bối cảnh khung lớn. Order flow mâu thuẫn với cấu trúc thì nói rõ và giảm `confidence`.
+- **Giá đã quy đổi** về giá chart (spot − basis): dùng thẳng, **không** cộng/trừ gì thêm.
+- **Tường thanh khoản** kèm số phút đã đứng: tường đứng lâu (≥ 30 phút) đáng tin hơn; tường vừa xuất hiện hoặc đã giảm mạnh dễ là lệnh ảo (spoof). Lịch sử sổ lệnh ngắn (có dòng "Lưu ý") thì giảm trọng số tường.
+- **POC / HVN / LVN 24h**: HVN/POC là vùng giá được chấp nhận (dễ chững lại), LVN là vùng giá đi nhanh qua.
+- **CVD** (mua chủ động − bán chủ động) và **phân kỳ**: giá xuống đáy mới mà CVD không xuống = lực bán yếu / hấp thụ (ủng hộ Spring/Test); giá lên đỉnh mới mà CVD không lên = ủng hộ UT/UTAD.
+- **Hấp thụ / lệnh market lớn**: lệnh bán lớn ở biên dưới range mà giá giữ = cầu hấp thụ cung (nỗ lực không có kết quả).
+- **Áp vào Wyckoff**: như mục Bookmap (SL ngoài vùng thanh khoản dày, TP trước tường / tại POC), nhưng entry/SL/TP vẫn lấy từ dữ liệu nến.
+- **Nộp `orderflow`** chỉ gồm `summary` (1–3 câu tiếng Việt) và `cvd`. **Không** gửi `levels`, `lastPrices`: server tự gắn các mức đã tính.
 
 # Quy tắc toạ độ (validator sẽ kiểm tra)
 

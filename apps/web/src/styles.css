@@ -367,6 +367,7 @@ button, input { font: inherit; color: inherit; }
 .badge.bm { margin-left: 4px; font-size: 10px; padding: 0 6px; background: color-mix(in srgb, #ab47bc 25%, transparent); color: #ce93d8; }
 .orderflow { display: flex; flex-direction: column; gap: 4px; }
 .bm-error { white-space: normal; word-break: break-all; }
+.of-status { white-space: normal; }
 .bm-refresh { align-self: flex-start; font-size: 11px; }
 .of-legend { font-size: 11px; }
 .of-ask { color: rgba(239, 83, 80, 0.85); }

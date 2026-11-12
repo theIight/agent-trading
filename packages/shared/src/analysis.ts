@@ -170,17 +170,29 @@ export type BookmapImageRole = (typeof BOOKMAP_IMAGE_ROLES)[number];
 export const ORDERFLOW_LEVEL_KINDS = ['ASK_WALL', 'BID_WALL', 'POC', 'HVN', 'LVN', 'ABSORPTION', 'AGGRESSION'] as const;
 export type OrderflowLevelKind = (typeof ORDERFLOW_LEVEL_KINDS)[number];
 
-/** COB = lệnh chờ trong sổ lệnh lúc chụp; SVP = volume đã khớp trong phiên; BUBBLE = lệnh market lớn. */
-export const ORDERFLOW_SIZE_SOURCES = ['COB', 'SVP', 'BUBBLE'] as const;
+/**
+ * Ảnh Bookmap: COB = lệnh chờ trong sổ lệnh lúc chụp; SVP = volume đã khớp trong phiên; BUBBLE = lệnh market lớn.
+ * Binance (server tự tính): BOOK = lệnh chờ trong sổ lệnh; VOLUME = volume đã khớp (profile); TRADES = lệnh market lớn.
+ */
+export const ORDERFLOW_SIZE_SOURCES = ['COB', 'SVP', 'BUBBLE', 'BOOK', 'VOLUME', 'TRADES'] as const;
+
+/** Nguồn order flow của một phân tích. */
+export const ORDERFLOW_SOURCES = ['bookmap-image', 'binance'] as const;
+export type OrderflowSource = (typeof ORDERFLOW_SOURCES)[number];
 
 const bookmapImageSchema = z.enum(BOOKMAP_IMAGE_ROLES);
 
 export const orderflowLevelSchema = z.object({
   kind: z.enum(ORDERFLOW_LEVEL_KINDS),
-  image: bookmapImageSchema.describe('Ảnh đọc được mức này: htf (khung lớn) | ltf (khung bé)'),
-  bookmapPrice: price.describe('Giá đúng như trên trục Bookmap, CHƯA quy đổi offset'),
-  /** Server điền = bookmapPrice − offset (giá trên chart của app). */
+  /** Bắt buộc với nguồn ảnh Bookmap; mức Binance do server tính không có. */
+  image: bookmapImageSchema.optional().describe('Ảnh đọc được mức này: htf (khung lớn) | ltf (khung bé)'),
+  bookmapPrice: price.optional().describe('Giá đúng như trên trục Bookmap, CHƯA quy đổi offset'),
+  /** Server điền = bookmapPrice − offset (giá trên chart của app); Binance: giá spot − basis. */
   price: price.optional(),
+  /** Binance: giá gốc trên sổ lệnh spot (chưa trừ basis). */
+  sourcePrice: price.optional(),
+  /** Binance: tường đã đứng liên tục bao nhiêu phút (server tính). */
+  persistMin: z.number().nonnegative().optional(),
   size: z.number().positive().optional().describe('Khối lượng in trên ảnh (COB/SVP). Không có số thì bỏ trống, không ước từ màu heatmap'),
   sizeSource: z.enum(ORDERFLOW_SIZE_SOURCES).optional(),
   strength: confidence.default(0.5),
@@ -200,6 +212,12 @@ export const orderflowSchema = z.object({
   offset: z.number().optional(),
   /** Server điền: giá cuối đọc trên ảnh − giá app lúc chụp. */
   measuredOffset: z.number().optional(),
+  /** Server điền: nguồn dữ liệu (thiếu = ảnh Bookmap, bản ghi cũ). */
+  source: z.enum(ORDERFLOW_SOURCES).optional(),
+  /** Server điền (Binance): thời điểm lấy dữ liệu, unix giây. */
+  asOf: z.number().optional(),
+  /** Server điền (Binance): số phút lịch sử sổ lệnh đã ghi tới lúc lấy. */
+  historyMin: z.number().optional(),
 });
 
 export const topDownStepSchema = z.object({
@@ -230,7 +248,7 @@ export const analysisSubmissionSchema = z.object({
   /** Không còn do agent gửi: server suy ra từ `tradePlan` (giữ để tương thích bản ghi cũ). */
   action: tradeActionSchema.optional(),
   tfConflicts: z.array(note).max(10).default([]),
-  /** Chỉ khi phân tích có ảnh Bookmap. */
+  /** Chỉ khi phân tích có order flow (ảnh Bookmap hoặc Binance). */
   orderflow: orderflowSchema.optional(),
 });
 
@@ -281,6 +299,8 @@ export interface AnalysisRecord {
   model?: string;
   /** Phân tích có kèm ảnh Bookmap. */
   bookmap?: boolean;
+  /** Nguồn order flow (thiếu: suy ra từ `bookmap`). */
+  orderflowSource?: OrderflowSource;
   status: AnalysisStatus;
   createdAt: number;
   finishedAt?: number;

@@ -10,7 +10,7 @@ import {
   type ValidatedSubmission,
 } from '@wca/shared';
 import { atr } from '../features/structure.ts';
-import { validateOrderflow, type OrderflowContext } from './orderflow.ts';
+import { validateBinanceOrderflow, validateOrderflow, type BinanceOrderflowContext, type OrderflowContext } from './orderflow.ts';
 import { deriveAction, validateTradePlan } from './tradePlan.ts';
 
 // Validator kết quả agent: schema → top-down → snap time/price về nến thật → kiểm tra trade plan.
@@ -26,6 +26,8 @@ export interface ValidationContext {
   minRiskReward?: number;
   /** Có khi phân tích kèm ảnh Bookmap: offset quy đổi + dữ liệu kiểm tra ảnh cũ. */
   bookmap?: OrderflowContext;
+  /** Có khi phân tích dùng order flow Binance (server tự tính levels). */
+  binance?: BinanceOrderflowContext;
 }
 
 export const DEFAULT_MIN_RR = 2;
@@ -255,7 +257,7 @@ export function validateSubmission(raw: unknown, ctx: ValidationContext): Valida
   const value: ValidatedSubmission = { ...s, tradePlan: tp.plan, action: deriveAction(tp.plan) };
 
   // --- Order flow (Bookmap): quy đổi giá, lọc mức ngoài vùng giá, kiểm tra ảnh cũ. Không ảnh hưởng trade plan.
-  const of = validateOrderflow(s.orderflow, ctx.bookmap, primary, tp.plan.setups);
+  const of = ctx.binance ? validateBinanceOrderflow(s.orderflow, ctx.binance) : validateOrderflow(s.orderflow, ctx.bookmap, primary, tp.plan.setups);
   warnings.push(...of.warnings);
   if (of.orderflow) value.orderflow = of.orderflow;
   else delete value.orderflow;

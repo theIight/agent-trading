@@ -7,6 +7,7 @@ export interface ServerConfig {
   defaultContextTfs: Timeframe[];
   agentMaxTfs: number;
   bookmap?: BookmapUiConfig;
+  orderflow?: { binanceSymbols: string[] };
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -42,6 +43,7 @@ export function startAnalysis(body: {
   runner?: RunnerId;
   model?: string;
   bookmap?: { offset?: number };
+  orderflow?: boolean;
 }): Promise<AnalysisRecord> {
   return request('/api/analyses', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
 }
@@ -57,6 +59,23 @@ export interface BookmapImageStatus {
 /** Trạng thái file ảnh Bookmap (đường dẫn cấu hình ở server). */
 export function fetchBookmapStatus(symbol: string): Promise<{ now: number; images: BookmapImageStatus[] }> {
   return request(`/api/bookmap/${encodeURIComponent(symbol)}`);
+}
+
+export interface OrderflowStatus {
+  now: number;
+  symbol: string;
+  connected: boolean;
+  synced: boolean;
+  since: number | null;
+  lastSampleAt: number | null;
+  historyMin: number;
+  spotPrice: number | null;
+  error?: string;
+}
+
+/** Trạng thái collector order flow Binance của symbol. */
+export function fetchOrderflowStatus(symbol: string): Promise<OrderflowStatus> {
+  return request(`/api/orderflow/${encodeURIComponent(symbol)}`);
 }
 
 export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {

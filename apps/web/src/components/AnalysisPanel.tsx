@@ -14,7 +14,7 @@ import {
   type TradePlan,
   type TradeSetup,
 } from '@wca/shared';
-import { fetchBookmapStatus, type BookmapImageStatus } from '../api/client.ts';
+import { fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import {
   bookmapOffsetOf,
@@ -160,6 +160,56 @@ function BookmapControls({ symbol, disabled }: { symbol: string; disabled: boole
   );
 }
 
+/** Lịch sử sổ lệnh tối thiểu để tin thời gian đứng của tường (khớp MIN_HISTORY_MIN ở server). */
+const OF_MIN_HISTORY_MIN = 30;
+
+function OrderflowStatusLine({ symbol }: { symbol: string }) {
+  const [st, setSt] = useState<OrderflowStatus | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      fetchOrderflowStatus(symbol).then(
+        r => alive && (setSt(r), setError(null)),
+        (e: Error) => alive && setError(e.message),
+      );
+    void load();
+    const timer = setInterval(load, BOOKMAP_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [symbol]);
+  if (error) return <div className="bm-meta down">{error}</div>;
+  if (!st) return <div className="muted bm-meta">Đang đọc trạng thái…</div>;
+  const live = st.connected && st.synced;
+  const lag = st.lastSampleAt ? st.now - st.lastSampleAt : null;
+  return (
+    <div className={`bm-meta of-status ${live ? 'muted' : 'down'}`}>
+      {live ? 'Đang ghi sổ lệnh Binance spot' : 'Mất kết nối Binance — đang thử lại'}
+      {st.spotPrice != null && <> · spot {fmtPrice(st.spotPrice)}</>}
+      {' · '}lịch sử {st.historyMin} phút
+      {st.historyMin < OF_MIN_HISTORY_MIN && <> (cần ≥ {OF_MIN_HISTORY_MIN} phút để tin tường)</>}
+      {lag != null && lag > 120 && <> · mẫu cuối {fmtAge(lag)}</>}
+      {st.error && <div className="down">{st.error}</div>}
+    </div>
+  );
+}
+
+function OrderflowControls({ symbol, disabled }: { symbol: string; disabled: boolean }) {
+  const { orderflowSymbols, useOrderflow, setUseOrderflow } = useAnalysisStore();
+  if (!orderflowSymbols.includes(symbol)) return null;
+  return (
+    <div className="bookmap">
+      <label className="check">
+        <input type="checkbox" checked={useOrderflow} disabled={disabled} onChange={e => setUseOrderflow(e.target.checked)} />
+        Dùng order flow Binance
+      </label>
+      {useOrderflow && <OrderflowStatusLine symbol={symbol} />}
+    </div>
+  );
+}
+
 function Controls() {
   const tf = useAppStore(s => s.tf);
   const { contextTfs, toggleContextTf, presets, applyPreset, savePreset, deletePreset, attachScreenshot, setAttachScreenshot, run, analyze, cancel } =
@@ -280,6 +330,7 @@ function Controls() {
       </label>
 
       <BookmapControls symbol={symbol} disabled={Boolean(run)} />
+      <OrderflowControls symbol={symbol} disabled={Boolean(run)} />
 
       {run ? (
         <button type="button" className="btn danger" onClick={() => void cancel()}>
@@ -440,6 +491,7 @@ function LegacyAction({ a }: { a: AnalysisResult }) {
 
 function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
   const unit = bookmapSizeUnit(symbol);
+  const binance = of.source === 'binance';
   const drift = of.measuredOffset !== undefined && of.offset !== undefined ? of.measuredOffset - of.offset : undefined;
   return (
     <div className="orderflow">
@@ -457,7 +509,15 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
         <ul className="events">
           {of.levels.map((lv, i) => (
             <li key={i}>
-              <b>{ORDERFLOW_KIND_LABELS[lv.kind]}</b> {fmtPrice(lv.price)} <span className="muted">(Bookmap {fmtPrice(lv.bookmapPrice)} · {ROLE_LABEL[lv.image].toLowerCase()})</span>
+              <b>{ORDERFLOW_KIND_LABELS[lv.kind]}</b> {fmtPrice(lv.price)}{' '}
+              {binance ? (
+                lv.persistMin !== undefined && <span className="muted">(đứng {Math.round(lv.persistMin)} phút)</span>
+              ) : (
+                <span className="muted">
+                  (Bookmap {fmtPrice(lv.bookmapPrice)}
+                  {lv.image && <> · {ROLE_LABEL[lv.image].toLowerCase()}</>})
+                </span>
+              )}
               {lv.size !== undefined && (
                 <span>
                   {' '}
@@ -469,6 +529,12 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
           ))}
         </ul>
       )}
+      {binance ? (
+        <div className="muted note">
+          Binance spot{of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>} · basis spot − chart {of.offset ?? 0}
+          {of.historyMin !== undefined && <> · lịch sử sổ lệnh {Math.round(of.historyMin)} phút</>}
+        </div>
+      ) : (
       <div className="muted note">
         Offset dùng {of.offset ?? '—'}
         {of.measuredOffset !== undefined && (
@@ -479,6 +545,7 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
           </>
         )}
       </div>
+      )}
     </div>
   );
 }
@@ -512,7 +579,7 @@ function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | nul
 
       {a.orderflow && (
         <>
-          <div className="section-title">Order flow (Bookmap)</div>
+          <div className="section-title">Order flow ({a.orderflow.source === 'binance' ? 'Binance' : 'Bookmap'})</div>
           <OrderflowCard of={a.orderflow} symbol={a.symbol} />
         </>
       )}
@@ -586,10 +653,16 @@ function History() {
               <b>{new Date(h.createdAt).toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}</b>{' '}
               <span className="muted">{h.tfs.map(t => tfLabel(t as Timeframe)).join(' → ')}</span>{' '}
               <span className="muted">· {runnerLabel(h)}</span>
-              {h.bookmap && (
-                <span className="badge bm" title="Có dùng ảnh Bookmap">
-                  BM
+              {h.orderflowSource === 'binance' ? (
+                <span className="badge bm" title="Có dùng order flow Binance">
+                  OF
                 </span>
+              ) : (
+                h.bookmap && (
+                  <span className="badge bm" title="Có dùng ảnh Bookmap">
+                    BM
+                  </span>
+                )
               )}
             </div>
             {h.result ? (

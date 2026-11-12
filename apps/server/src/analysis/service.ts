@@ -26,6 +26,8 @@ import type { AgentRunner } from '../runner/types.ts';
 import { imageStatus, inspectImage, type BookmapImageFile, type BookmapImageStatus } from './bookmapSource.ts';
 import { referencedTfs, validateSubmission } from '../validate/index.ts';
 import type { AnalysisRepo } from './repo.ts';
+import type { BinanceOrderflow } from '../orderflow/binanceOrderflow.ts';
+import { cvdText, type BinanceOrderflowSnapshot } from '../orderflow/calc.ts';
 
 export interface StartInput {
   symbol: string;
@@ -38,6 +40,8 @@ export interface StartInput {
   model?: string;
   /** Dùng ảnh Bookmap (đọc từ đường dẫn cấu hình ở server), chỉ cho symbol có cấu hình. */
   bookmap?: BookmapInput;
+  /** Dùng order flow Binance (server tự tính), chỉ cho symbol bật collector. */
+  orderflow?: boolean;
 }
 
 export interface BookmapInput {
@@ -67,6 +71,8 @@ export interface ServiceOptions {
   instrumentOf?: (symbol: string) => InstrumentInfo;
   /** Không có → không nhận ảnh Bookmap. */
   bookmap?: BookmapOptions;
+  /** Không có → không có order flow Binance. */
+  binanceOrderflow?: BinanceOrderflow;
 }
 
 /** Không có ngưỡng cho symbol → coi như không giới hạn (không cảnh báo lệch offset). */
@@ -86,7 +92,15 @@ export type SubmitOutcome =
 interface Job {
   id: string;
   runner: RunnerId;
-  req: { symbol: string; primaryTf: Timeframe; plan: TfPlanEntry[]; hasScreenshot: boolean; hasBookmap: boolean; model?: string };
+  req: {
+    symbol: string;
+    primaryTf: Timeframe;
+    plan: TfPlanEntry[];
+    hasScreenshot: boolean;
+    hasBookmap: boolean;
+    hasBinanceOrderflow: boolean;
+    model?: string;
+  };
   /** Ảnh Bookmap được copy khi job bắt đầu chạy (ảnh mới nhất dù phải chờ hàng đợi). */
   bookmap?: PendingBookmap;
 }
@@ -174,7 +188,12 @@ export class AnalysisService {
     if (!planRes.ok) throw new ServiceError(planRes.error);
     const id = randomUUID();
     const primaryTf = input.primaryTf as Timeframe;
+    if (input.bookmap && input.orderflow) throw new ServiceError('Chọn một nguồn order flow: ảnh Bookmap hoặc Binance');
     const bookmap = input.bookmap ? this.prepareBookmap(symbol, input.bookmap, runner) : null;
+    const binanceOf = Boolean(input.orderflow);
+    if (binanceOf && !this.opts.binanceOrderflow?.has(symbol)) {
+      throw new ServiceError(`Chưa bật order flow Binance cho ${symbol} (ORDERFLOW_BINANCE_SYMBOLS)`);
+    }
 
     let hasScreenshot = false;
     if (input.screenshot) {
@@ -193,13 +212,22 @@ export class AnalysisService {
       createdAt: Date.now(),
       runner: runnerId,
       model,
-      ...(bookmap ? { bookmap: true } : {}),
+      ...(bookmap ? { bookmap: true, orderflowSource: 'bookmap-image' as const } : {}),
+      ...(binanceOf ? { orderflowSource: 'binance' as const } : {}),
     };
     this.repo.create(rec);
     this.queue.push({
       id,
       runner: runnerId,
-      req: { symbol, primaryTf, plan: planRes.plan, hasScreenshot: hasScreenshot && runner.supportsScreenshot, hasBookmap: Boolean(bookmap), model },
+      req: {
+        symbol,
+        primaryTf,
+        plan: planRes.plan,
+        hasScreenshot: hasScreenshot && runner.supportsScreenshot,
+        hasBookmap: Boolean(bookmap),
+        hasBinanceOrderflow: binanceOf,
+        model,
+      },
       ...(bookmap ? { bookmap } : {}),
     });
     if (this.current) this.emitStep(id, `Đang chờ: còn ${this.queue.length} phân tích phía trước`);
@@ -207,11 +235,55 @@ export class AnalysisService {
     return rec;
   }
 
-  /** Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap. */
+  /** Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap (trừ symbol đã dùng order flow Binance). */
   get bookmapSymbols(): string[] {
     return Object.entries(this.opts.bookmap?.images ?? {})
-      .filter(([, roles]) => Object.values(roles).some(Boolean))
+      .filter(([sym, roles]) => Object.values(roles).some(Boolean) && !this.opts.binanceOrderflow?.has(sym))
       .map(([sym]) => sym);
+  }
+
+  /** Symbol bật order flow Binance. */
+  get orderflowSymbols(): string[] {
+    return this.opts.binanceOrderflow?.symbols ?? [];
+  }
+
+  orderflowStatus(symbol: string) {
+    const st = this.opts.binanceOrderflow?.status(normalizeSymbol(symbol));
+    if (!st) throw new ServiceError(`Chưa bật order flow Binance cho ${symbol}`, 404);
+    return st;
+  }
+
+  orderflowSnapshotPath(id: string): string {
+    return path.join(this.opts.screenshotDir, `${this.safeId(id)}-orderflow.json`);
+  }
+
+  readOrderflowSnapshot(id: string): BinanceOrderflowSnapshot | null {
+    try {
+      return JSON.parse(fs.readFileSync(this.orderflowSnapshotPath(id), 'utf8')) as BinanceOrderflowSnapshot;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Order flow Binance đã chụp lúc job bắt đầu (cho MCP get_orderflow). */
+  orderflowSnapshot(id: string): BinanceOrderflowSnapshot {
+    if (!this.repo.get(id)) throw new ServiceError('Không tìm thấy analysisId', 404);
+    const snap = this.readOrderflowSnapshot(id);
+    if (!snap) throw new ServiceError('Phân tích này không có order flow Binance', 404);
+    return snap;
+  }
+
+  /** Lấy order flow Binance tại thời điểm job bắt đầu; basis tính theo giá chart (1m) hiện tại. */
+  private async takeOrderflowSnapshot(id: string, symbol: string): Promise<BinanceOrderflowSnapshot> {
+    const of = this.opts.binanceOrderflow;
+    if (!of) throw new Error('Order flow Binance chưa bật');
+    const appPrice = await this.klines
+      .getKlines({ symbol, tf: '1m', limit: 2 })
+      .then(res => res.candles.at(-1)?.close ?? null)
+      .catch(() => null);
+    const snap = await of.snapshot(symbol, appPrice);
+    fs.writeFileSync(this.orderflowSnapshotPath(id), JSON.stringify(snap));
+    return snap;
   }
 
   /** Trạng thái file ảnh Bookmap của symbol (cho panel xem trước). */
@@ -355,6 +427,12 @@ export class AnalysisService {
         const meta = this.snapshotBookmap(job.id, job.req.symbol, job.bookmap);
         this.emitStep(job.id, `Đã lấy ảnh Bookmap (${meta.images.join(', ')}), chụp lúc ${new Date(meta.capturedAt * 1000).toLocaleTimeString('vi-VN')}`);
       }
+      if (job.req.hasBinanceOrderflow) {
+        const snap = await this.takeOrderflowSnapshot(job.id, job.req.symbol);
+        const walls = snap.walls.length;
+        this.emitStep(job.id, `Đã lấy order flow Binance: ${walls} tường, lịch sử sổ lệnh ${Math.round(snap.historyMin)} phút, basis ${snap.basis}`);
+        for (const n of snap.notes) this.emitStep(job.id, n);
+      }
       const outcome = await runner.run(
         { analysisId: job.id, ...job.req, barsPerTf: this.opts.barsPerTf, instrument: this.opts.instrumentOf?.(job.req.symbol) },
         {
@@ -412,6 +490,18 @@ export class AnalysisService {
       instrument: this.opts.instrumentOf?.(rec.symbol),
       minRiskReward: this.opts.minRiskReward ?? 2,
       bookmap: await this.bookmapRequestInfo(rec.id, rec.symbol),
+      orderflow: this.orderflowRequestInfo(rec.id),
+    };
+  }
+
+  private orderflowRequestInfo(id: string) {
+    const snap = this.readOrderflowSnapshot(id);
+    if (!snap) return null;
+    return {
+      source: 'binance',
+      venue: snap.venue,
+      asOf: new Date(snap.asOf * 1000).toISOString(),
+      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart; chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
     };
   }
 
@@ -493,7 +583,9 @@ export class AnalysisService {
 
     const bmMeta = analysisId ? await this.bookmapContext(analysisId, symbol) : null;
     const bookmap = bmMeta ? { ...bmMeta, maxAgeSec: (this.opts.bookmap?.maxAgeMin ?? 30) * 60 } : undefined;
-    const outcome = validateSubmission(raw, { symbol, primaryTf, plan, candlesByTf, minRiskReward: this.opts.minRiskReward, bookmap });
+    const ofSnap = analysisId ? this.readOrderflowSnapshot(analysisId) : null;
+    const binance = ofSnap ? { snapshot: ofSnap, cvdText: cvdText(ofSnap.cvd, ofSnap.unit) } : undefined;
+    const outcome = validateSubmission(raw, { symbol, primaryTf, plan, candlesByTf, minRiskReward: this.opts.minRiskReward, bookmap, binance });
     if (!outcome.ok) {
       if (analysisId) this.emitStep(analysisId, `Kết quả bị từ chối (${outcome.errors.length} lỗi), agent đang sửa`);
       return outcome;

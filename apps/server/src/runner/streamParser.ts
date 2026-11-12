@@ -37,6 +37,8 @@ export function describeToolUse(name: string, input: Record<string, unknown> = {
       return 'Xem ảnh chart';
     case 'get_bookmap_images':
       return 'Xem ảnh Bookmap (order flow)';
+    case 'get_orderflow':
+      return 'Đọc order flow Binance';
     case 'submit_analysis':
       return 'Nộp kết quả phân tích';
     default:

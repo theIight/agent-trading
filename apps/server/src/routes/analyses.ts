@@ -13,6 +13,7 @@ const startSchema = z.object({
   runner: z.string().optional(),
   model: z.string().max(80).optional(),
   bookmap: z.object({ offset: z.number().finite().optional() }).optional(),
+  orderflow: z.boolean().optional(),
 });
 
 function openSse(req: FastifyRequest, reply: FastifyReply, subscribe: (send: (e: ProgressEvent) => void) => () => void) {
@@ -63,6 +64,16 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     try {
       const img = service.bookmapPreview(symbol, role);
       return reply.type(img.mimeType).header('cache-control', 'no-store').send(fs.readFileSync(img.file));
+    } catch (err) {
+      if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+      throw err;
+    }
+  });
+
+  // ---------- Trạng thái collector order flow Binance ----------
+  app.get('/api/orderflow/:symbol', async (req, reply) => {
+    try {
+      return { now: Math.floor(Date.now() / 1000), ...service.orderflowStatus((req.params as { symbol: string }).symbol) };
     } catch (err) {
       if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
       throw err;
@@ -124,6 +135,15 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     internal.get('/internal/analyses/:id/bookmap', async (req, reply) => {
       try {
         return await service.bookmapImages((req.params as { id: string }).id);
+      } catch (err) {
+        if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
+        throw err;
+      }
+    });
+
+    internal.get('/internal/analyses/:id/orderflow', async (req, reply) => {
+      try {
+        return service.orderflowSnapshot((req.params as { id: string }).id);
       } catch (err) {
         if (err instanceof ServiceError) return reply.code(err.status).send({ error: err.message });
         throw err;

@@ -462,8 +462,8 @@ export function buildOrderflowLines(levels: NonNullable<AnalysisResult['orderflo
   const placed = levels.filter(lv => lv.price !== undefined);
   const walls = placed.filter(lv => (lv.kind === 'ASK_WALL' || lv.kind === 'BID_WALL') && lv.size !== undefined);
   const maxByImage = new Map<string, number>();
-  for (const w of walls) maxByImage.set(w.image, Math.max(maxByImage.get(w.image) ?? 0, w.size!));
-  const big = walls.filter(w => w.size! >= OF_MIN_WALL_RATIO * maxByImage.get(w.image)!);
+  for (const w of walls) maxByImage.set(w.image ?? 'book', Math.max(maxByImage.get(w.image ?? 'book') ?? 0, w.size!));
+  const big = walls.filter(w => w.size! >= OF_MIN_WALL_RATIO * maxByImage.get(w.image ?? 'book')!);
   const out: OrderflowLineItem[] = [];
   for (const kind of ['ASK_WALL', 'BID_WALL'] as const) {
     const ask = kind === 'ASK_WALL';
