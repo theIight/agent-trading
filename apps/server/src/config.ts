@@ -142,6 +142,10 @@ export const config = {
   orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
   orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
+  /** Giá còn cách mép vùng phủ snapshot < N% độ rộng phía đó → snapshot lại sớm (0 = tắt). */
+  orderflowEdgeResyncPct: int('ORDERFLOW_EDGE_RESYNC_PCT', 35),
+  /** Khoảng cách tối thiểu giữa 2 lần snapshot do chạm mép (giây). */
+  orderflowEdgeResyncMinSec: int('ORDERFLOW_EDGE_RESYNC_MIN_SEC', 60),
   /** Chu kỳ snapshot lại theo symbol (`ORDERFLOW_RESYNC_MIN_<SYMBOL>`): futures chỉ chụp được 1000 mức nên chụp lại thường xuyên để vùng phủ theo giá. */
   orderflowResyncMinBySymbol: symbolNums('ORDERFLOW_RESYNC_MIN_', { XAUUSD: 5 }),
   /** Thanh lý (bong bóng thật Binance + OKX, heatmap ước tính từ OI Binance) cho các symbol Binance Futures này. Rỗng = tắt. */

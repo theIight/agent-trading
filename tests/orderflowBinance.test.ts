@@ -9,7 +9,7 @@ import { AnalysisService } from '../apps/server/src/analysis/service.ts';
 import { KlineService } from '../apps/server/src/market/klineService.ts';
 import type { FetchKlinesParams, MarketDataProvider } from '../apps/server/src/market/provider.ts';
 import type { AgentRunHooks, AgentRunRequest, AgentRunner, AgentRunOutcome } from '../apps/server/src/runner/types.ts';
-import { LocalBook, sampleBook, type BookSample } from '../apps/server/src/orderflow/localBook.ts';
+import { LocalBook, applyDiffsToLevels, nearCoverEdge, sampleBook, type BookSample } from '../apps/server/src/orderflow/localBook.ts';
 import {
   buildSnapshot,
   cvdStats,
@@ -54,13 +54,13 @@ describe('LocalBook (quy trình đồng bộ Binance)', () => {
     expect(b.applyDiff({ U: 150, u: 160, b: [], a: [] })).toBe('gap');
   });
 
-  it('sampleBook gom theo bucket, chỉ trong vùng snapshot phủ', () => {
+  it('sampleBook gom theo bucket, lấy cả mức ngoài vùng snapshot đã nhận diff', () => {
     const b = new LocalBook();
     b.applySnapshot({ lastUpdateId: 1, bids: [['73005', '1'], ['73001', '2'], ['72990', '5']], asks: [['73012', '1'], ['73025', '4']] });
-    b.applyDiff({ U: 2, u: 2, b: [['70000', '99']], a: [] }); // ngoài vùng snapshot → bỏ
+    b.applyDiff({ U: 2, u: 2, b: [['70000', '99']], a: [] }); // ngoài vùng snapshot, đã nhận diff → khối lượng đúng
     const s = sampleBook(b, 10, 1000)!;
     expect(s.mid).toBe(73008.5);
-    expect(s.bids).toEqual([[72990, 5], [73000, 3]]);
+    expect(s.bids).toEqual([[70000, 99], [72990, 5], [73000, 3]]);
     expect(s.asks).toEqual([[73010, 1], [73020, 4]]);
   });
 });
@@ -262,6 +262,129 @@ describe('BookCollector', () => {
       db.prepare('INSERT INTO book_samples (symbol, t, data) VALUES (?, ?, ?)').run('BTCUSDT', t, JSON.stringify({ t, mid: 1, bids: [], asks: [] }));
     }
     expect(col.samples(0, 2000).map(s => s.t)).toEqual([1000, 1010]);
+  });
+});
+
+describe('Vùng phủ sổ lệnh: mức ngoài vùng phủ + snapshot lại', () => {
+  const L = (rows: [number, number][]) => rows.map(([p, q]) => [String(p), String(q)] as [string, string]);
+  const snap = (id: number, bids: [number, number][], asks: [number, number][]) => ({ lastUpdateId: id, bids: L(bids), asks: L(asks) });
+
+  it('sampleBook lấy mức ngoài vùng phủ đã nhận diff, mất khi diff về 0, ghi vùng phủ vào mẫu', () => {
+    const b = new LocalBook();
+    b.applySnapshot(snap(100, [[100, 1], [105, 1]], [[106, 1], [110, 1]]));
+    b.applyDiff({ U: 101, u: 101, b: [['90', '500']], a: [['130', '7']] });
+    const s = sampleBook(b, 10, 1)!;
+    expect(s.bids).toEqual([[90, 500], [100, 2]]);
+    expect(s.asks).toEqual([[100, 1], [110, 1], [130, 7]]);
+    expect(s).toMatchObject({ coverLow: 100, coverHigh: 110 });
+    expect(b.farLevelCount()).toBe(2);
+    b.applyDiff({ U: 102, u: 102, b: [['90', '0']], a: [] });
+    expect(sampleBook(b, 10, 2)!.bids).toEqual([[100, 2]]);
+  });
+
+  it('applySnapshot giữ mức cũ ngoài vùng phủ mới (≤ 15% quanh giá), trong vùng phủ theo snapshot', () => {
+    const b = new LocalBook();
+    const carry = { bids: new Map([[90, 500], [101, 9], [50, 3]]), asks: new Map([[120, 4], [200, 1]]) };
+    b.applySnapshot(snap(100, [[100, 1], [105, 1]], [[106, 1], [110, 1]]), carry);
+    expect([...b.bids.entries()].sort((x, y) => x[0] - y[0])).toEqual([[90, 500], [100, 1], [105, 1]]);
+    expect([...b.asks.entries()].sort((x, y) => x[0] - y[0])).toEqual([[106, 1], [110, 1], [120, 4]]);
+    expect(b.snapMid).toBe(105.5);
+  });
+
+  it('applyDiffsToLevels áp khối lượng tuyệt đối theo thứ tự, 0 thì xoá', () => {
+    const lv = applyDiffsToLevels({ bids: new Map([[90, 500]]), asks: new Map() }, [
+      { U: 1, u: 1, b: [['90', '300'], ['80', '5']], a: [] },
+      { U: 2, u: 2, b: [['80', '0']], a: [['120', '2']] },
+    ]);
+    expect([...lv.bids]).toEqual([[90, 300]]);
+    expect([...lv.asks]).toEqual([[120, 2]]);
+  });
+
+  it('nearCoverEdge theo % độ rộng mỗi phía', () => {
+    // snapMid 1000, phủ [900, 1200]: phía dưới rộng 100, phía trên 200.
+    expect(nearCoverEdge(930, 900, 1200, 1000, 35)).toBe(true);
+    expect(nearCoverEdge(950, 900, 1200, 1000, 35)).toBe(false);
+    expect(nearCoverEdge(1140, 900, 1200, 1000, 35)).toBe(true);
+    expect(nearCoverEdge(1100, 900, 1200, 1000, 35)).toBe(false);
+    expect(nearCoverEdge(901, 900, 1200, 1000, 0)).toBe(false);
+  });
+
+  function deferredFetch() {
+    const queue: { resolve: (r: Response) => void }[] = [];
+    let calls = 0;
+    const fetchImpl = (() => {
+      calls++;
+      return new Promise<Response>(resolve => queue.push({ resolve }));
+    }) as unknown as typeof fetch;
+    const answer = (body: unknown) => queue.shift()!.resolve(new Response(JSON.stringify(body)));
+    return { fetchImpl, answer, calls: () => calls };
+  }
+
+  it('snapshot lại định kỳ giữ mức ngoài vùng phủ (kể cả diff cũ hơn snapshot); mất chuỗi thì bỏ', async () => {
+    const db = openDb(':memory:');
+    const ws = new FakeWs();
+    const f = deferredFetch();
+    const col = new BookCollector({
+      symbol: 'BTCUSDT', bucket: 10, sampleSec: 3600, retainH: 24, resyncMin: 600, bigTradeQty: 99, db, fetchImpl: f.fetchImpl,
+      wsFactory: () => ws as unknown as WebSocket, now: () => 5000,
+    });
+    col.start();
+    let p = col.resync('test');
+    f.answer(snap(100, [[72990, 1], [72800, 2]], [[73005, 1], [73200, 1]]));
+    await p;
+    ws.emit({ e: 'depthUpdate', U: 101, u: 101, b: [['70000', '500']], a: [] });
+    expect(col.takeSample()!.bids[0]).toEqual([70000, 500]);
+
+    p = col.resync('định kỳ');
+    // Diff tới trong lúc chụp, cũ hơn snapshot mới (u ≤ 102) → vẫn phải áp cho mức giữ lại.
+    ws.emit({ e: 'depthUpdate', U: 102, u: 102, b: [['70000', '300']], a: [] });
+    f.answer(snap(102, [[72990, 1], [72700, 2]], [[73005, 1], [73300, 1]]));
+    await p;
+    // Sổ chỉ coi là đồng bộ khi có diff mới sau snapshot (thực tế 100ms/lần).
+    ws.emit({ e: 'depthUpdate', U: 103, u: 103, b: [], a: [] });
+    expect(col.takeSample()!.bids[0]).toEqual([70000, 300]);
+    expect(col.status()).toMatchObject({ farLevels: 1, lastResyncReason: 'định kỳ', coverLow: 72700 });
+
+    p = col.resync('mất chuỗi update');
+    f.answer(snap(103, [[72990, 1], [72700, 2]], [[73005, 1], [73300, 1]]));
+    await p;
+    ws.emit({ e: 'depthUpdate', U: 104, u: 104, b: [], a: [] });
+    expect(col.takeSample()!.bids[0]).toEqual([72700, 2]);
+    expect(col.status().farLevels).toBe(0);
+    col.stop();
+  });
+
+  it('giá tới gần mép vùng phủ → snapshot lại, tối đa 1 lần mỗi edgeResyncMinSec', async () => {
+    const db = openDb(':memory:');
+    const ws = new FakeWs();
+    const f = deferredFetch();
+    let now = 5000;
+    const col = new BookCollector({
+      symbol: 'BTCUSDT', bucket: 10, sampleSec: 3600, retainH: 24, resyncMin: 600, bigTradeQty: 99, db, fetchImpl: f.fetchImpl,
+      edgeResyncPct: 35, edgeResyncMinSec: 60, wsFactory: () => ws as unknown as WebSocket, now: () => now,
+    });
+    col.start();
+    const p = col.resync('test');
+    // snapMid 73000, phủ dưới 200$ → ngưỡng 70$ trên coverLow 72800.
+    f.answer(snap(100, [[72995, 1], [72800, 2]], [[73005, 1], [73200, 1]]));
+    await p;
+    col.takeSample();
+    expect(f.calls()).toBe(1);
+    ws.emit({ e: 'depthUpdate', U: 101, u: 101, b: [['72995', '0'], ['72850', '1']], a: [['73005', '0'], ['72860', '1']] });
+    col.takeSample();
+    expect(f.calls()).toBe(2);
+    f.answer(snap(101, [[72850, 1], [72600, 2]], [[72860, 1], [73100, 1]]));
+    await new Promise(r => setTimeout(r, 0));
+    // Vẫn gần mép nhưng chưa đủ 60s → không chụp lại.
+    ws.emit({ e: 'depthUpdate', U: 102, u: 102, b: [['72850', '0'], ['72610', '1']], a: [['72860', '0'], ['72620', '1']] });
+    expect(col.status()).toMatchObject({ lastResyncReason: 'gần mép vùng phủ', coverLow: 72600 });
+    now = 5030;
+    col.takeSample();
+    expect(f.calls()).toBe(2);
+    now = 5061;
+    col.takeSample();
+    expect(f.calls()).toBe(3);
+    col.stop();
   });
 });
 
