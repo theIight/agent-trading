@@ -1,15 +1,47 @@
 import type { Db } from '../db/index.ts';
-import { LocalBook, sampleBook, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
+import { LocalBook, sampleBook, type BookMarket, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
 import type { BigTrade } from './calc.ts';
 
-// Collector sổ lệnh + lệnh khớp lớn của Binance spot (WebSocket công khai, không cần key).
+// Collector sổ lệnh + lệnh khớp lớn của Binance spot / USDⓈ-M futures (WebSocket công khai, không cần key).
 // Mỗi `sampleSec` giây gom sổ lệnh theo bucket và ghi SQLite để có "heatmap" (tường đứng bao lâu) qua các lần restart.
 
 export const BINANCE_SPOT_REST = 'https://api.binance.com';
 export const BINANCE_SPOT_WS = 'wss://stream.binance.com:9443';
+export const BINANCE_FUTURES_REST = 'https://fapi.binance.com';
+/** Futures tách WebSocket: sổ lệnh ở `/public`, lệnh khớp ở `/market` (đường cũ `/stream` không gửi aggTrade). */
+export const BINANCE_FUTURES_WS = 'wss://fstream.binance.com';
+
+export interface StreamEndpoint {
+  url: string;
+  /** Socket này mang sổ lệnh (đóng → reset sổ lệnh). */
+  depth: boolean;
+}
+
+/** URL WebSocket theo market. */
+export function streamEndpoints(market: BookMarket, sourceSymbol: string): StreamEndpoint[] {
+  const s = sourceSymbol.toLowerCase();
+  if (market === 'futures') {
+    return [
+      { url: `${BINANCE_FUTURES_WS}/public/stream?streams=${s}@depth@100ms`, depth: true },
+      { url: `${BINANCE_FUTURES_WS}/market/stream?streams=${s}@aggTrade`, depth: false },
+    ];
+  }
+  return [{ url: `${BINANCE_SPOT_WS}/stream?streams=${s}@depth@100ms/${s}@aggTrade`, depth: true }];
+}
+
+/** URL snapshot sổ lệnh REST (spot tối đa 5000 mức, futures 1000). */
+export function depthSnapshotUrl(market: BookMarket, sourceSymbol: string): string {
+  return market === 'futures'
+    ? `${BINANCE_FUTURES_REST}/fapi/v1/depth?symbol=${sourceSymbol}&limit=1000`
+    : `${BINANCE_SPOT_REST}/api/v3/depth?symbol=${sourceSymbol}&limit=5000`;
+}
 
 export interface CollectorOptions {
+  /** Symbol trên chart (khoá lưu DB). */
   symbol: string;
+  /** Symbol trên Binance (mặc định = symbol). */
+  sourceSymbol?: string;
+  market?: BookMarket;
   bucket: number;
   sampleSec: number;
   retainH: number;
@@ -26,6 +58,11 @@ export interface CollectorOptions {
 
 export interface CollectorStatus {
   symbol: string;
+  sourceSymbol: string;
+  market: BookMarket;
+  /** Vùng giá snapshot sổ lệnh phủ được (0 khi chưa đồng bộ). */
+  coverLow: number;
+  coverHigh: number;
   connected: boolean;
   synced: boolean;
   /** Unix giây: mẫu sổ lệnh cũ nhất còn lưu. */
@@ -42,14 +79,17 @@ interface SampleRow {
 }
 
 export class BookCollector {
-  private readonly book = new LocalBook();
-  private ws: WebSocket | null = null;
+  private readonly book: LocalBook;
+  private readonly market: BookMarket;
+  private readonly sourceSymbol: string;
+  /** Socket đang mở theo URL. */
+  private sockets = new Map<string, WebSocket>();
+  private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private reconnectDelays = new Map<string, number>();
   private buffer: DepthDiff[] = [];
   private syncing = false;
   private stopped = true;
   private timers: ReturnType<typeof setInterval>[] = [];
-  private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-  private reconnectDelay = 1000;
   private lastError: string | undefined;
   /** Lệnh chủ động đang gộp theo giây: key `${giây}:${side}`. */
   private pendingTrades = new Map<string, { t: number; side: 'BUY' | 'SELL'; qty: number; notional: number }>();
@@ -61,6 +101,9 @@ export class BookCollector {
     this.fetchImpl = opts.fetchImpl ?? fetch;
     this.wsFactory = opts.wsFactory ?? (url => new WebSocket(url));
     this.now = opts.now ?? (() => Math.floor(Date.now() / 1000));
+    this.market = opts.market ?? 'spot';
+    this.sourceSymbol = opts.sourceSymbol ?? opts.symbol;
+    this.book = new LocalBook(this.market);
   }
 
   get symbol(): string {
@@ -70,7 +113,7 @@ export class BookCollector {
   start(): void {
     if (!this.stopped) return;
     this.stopped = false;
-    this.connect();
+    for (const ep of streamEndpoints(this.market, this.sourceSymbol)) this.connect(ep);
     this.timers.push(setInterval(() => this.takeSample(), this.opts.sampleSec * 1000));
     this.timers.push(setInterval(() => void this.resync('định kỳ'), this.opts.resyncMin * 60_000));
     this.timers.push(setInterval(() => this.prune(), 10 * 60_000));
@@ -81,11 +124,11 @@ export class BookCollector {
     this.stopped = true;
     for (const t of this.timers) clearInterval(t);
     this.timers = [];
-    if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
-    this.reconnectTimer = null;
-    const ws = this.ws;
-    this.ws = null;
-    ws?.close();
+    for (const t of this.reconnectTimers.values()) clearTimeout(t);
+    this.reconnectTimers.clear();
+    const sockets = [...this.sockets.values()];
+    this.sockets.clear();
+    for (const ws of sockets) ws.close();
     this.book.reset();
   }
 
@@ -95,7 +138,11 @@ export class BookCollector {
       .get(this.opts.symbol) as { lo: number | null; hi: number | null };
     return {
       symbol: this.opts.symbol,
-      connected: this.ws?.readyState === WebSocket.OPEN,
+      sourceSymbol: this.sourceSymbol,
+      market: this.market,
+      coverLow: this.book.isSynced ? this.book.coverLow : 0,
+      coverHigh: this.book.isSynced ? this.book.coverHigh : 0,
+      connected: this.sockets.size === streamEndpoints(this.market, this.sourceSymbol).length && [...this.sockets.values()].every(ws => ws.readyState === WebSocket.OPEN),
       synced: this.book.isSynced,
       since: range.lo,
       lastSampleAt: range.hi,
@@ -130,19 +177,20 @@ export class BookCollector {
   }
 
   // ---------- WebSocket ----------
-  private connect(): void {
+  private connect(ep: StreamEndpoint): void {
     if (this.stopped) return;
-    const s = this.opts.symbol.toLowerCase();
-    const ws = this.wsFactory(`${BINANCE_SPOT_WS}/stream?streams=${s}@depth@100ms/${s}@aggTrade`);
-    this.ws = ws;
-    this.buffer = [];
-    this.book.reset();
+    const ws = this.wsFactory(ep.url);
+    this.sockets.set(ep.url, ws);
+    if (ep.depth) {
+      this.buffer = [];
+      this.book.reset();
+    }
     ws.addEventListener('open', () => {
-      this.reconnectDelay = 1000;
-      void this.resync('kết nối');
+      this.reconnectDelays.delete(ep.url);
+      if (ep.depth) void this.resync('kết nối');
     });
     ws.addEventListener('message', ev => {
-      if (this.ws !== ws) return;
+      if (this.sockets.get(ep.url) !== ws) return;
       try {
         this.onMessage(JSON.parse(String(ev.data)) as { data?: Record<string, unknown> });
       } catch {
@@ -150,23 +198,27 @@ export class BookCollector {
       }
     });
     ws.addEventListener('close', () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      this.book.reset();
-      this.scheduleReconnect();
+      if (this.sockets.get(ep.url) !== ws) return;
+      this.sockets.delete(ep.url);
+      if (ep.depth) this.book.reset();
+      this.scheduleReconnect(ep);
     });
     ws.addEventListener('error', () => {
       this.lastError = 'Lỗi WebSocket Binance';
     });
   }
 
-  private scheduleReconnect(): void {
-    if (this.stopped || this.reconnectTimer) return;
-    this.reconnectTimer = setTimeout(() => {
-      this.reconnectTimer = null;
-      this.connect();
-    }, this.reconnectDelay);
-    this.reconnectDelay = Math.min(this.reconnectDelay * 2, 60_000);
+  private scheduleReconnect(ep: StreamEndpoint): void {
+    if (this.stopped || this.reconnectTimers.has(ep.url)) return;
+    const delay = this.reconnectDelays.get(ep.url) ?? 1000;
+    this.reconnectTimers.set(
+      ep.url,
+      setTimeout(() => {
+        this.reconnectTimers.delete(ep.url);
+        this.connect(ep);
+      }, delay),
+    );
+    this.reconnectDelays.set(ep.url, Math.min(delay * 2, 60_000));
   }
 
   /** Xử lý một message của combined stream (export cho test qua `handleMessage`). */
@@ -179,6 +231,7 @@ export class BookCollector {
     if (!d) return;
     if (d.e === 'depthUpdate') {
       const diff: DepthDiff = { U: Number(d.U), u: Number(d.u), b: d.b as DepthDiff['b'], a: d.a as DepthDiff['a'] };
+      if (d.pu !== undefined) diff.pu = Number(d.pu);
       if (this.syncing || this.book.lastUpdateId < 0) {
         this.buffer.push(diff);
         if (this.buffer.length > 5000) this.buffer.shift();
@@ -252,7 +305,7 @@ export class BookCollector {
   }
 
   private async fetchSnapshot(): Promise<DepthSnapshot> {
-    const res = await this.fetchImpl(`${BINANCE_SPOT_REST}/api/v3/depth?symbol=${this.opts.symbol}&limit=5000`, { signal: AbortSignal.timeout(15_000) });
+    const res = await this.fetchImpl(depthSnapshotUrl(this.market, this.sourceSymbol), { signal: AbortSignal.timeout(15_000) });
     if (!res.ok) throw new Error(`Binance ${res.status}`);
     return (await res.json()) as DepthSnapshot;
   }

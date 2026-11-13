@@ -7,6 +7,8 @@ import {
   bookmapInstrumentLabel,
   buildTfPlan,
   isRunnerId,
+  isTimeframe,
+  tfSeconds,
   normalizeSymbol,
   normalizeTfInput,
   type RunnerId,
@@ -27,6 +29,8 @@ import { imageStatus, inspectImage, type BookmapImageFile, type BookmapImageStat
 import { referencedTfs, validateSubmission } from '../validate/index.ts';
 import type { AnalysisRepo } from './repo.ts';
 import type { BinanceOrderflow } from '../orderflow/binanceOrderflow.ts';
+import type { LiquidationService } from '../liquidation/service.ts';
+import type { VolumeAggService } from '../volumeAgg/service.ts';
 import { cvdText, type BinanceOrderflowSnapshot } from '../orderflow/calc.ts';
 
 export interface StartInput {
@@ -73,6 +77,8 @@ export interface ServiceOptions {
   bookmap?: BookmapOptions;
   /** Không có → không có order flow Binance. */
   binanceOrderflow?: BinanceOrderflow;
+  liquidation?: LiquidationService;
+  volumeAgg?: VolumeAggService;
 }
 
 /** Không có ngưỡng cho symbol → coi như không giới hạn (không cảnh báo lệch offset). */
@@ -235,10 +241,14 @@ export class AnalysisService {
     return rec;
   }
 
-  /** Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap (trừ symbol đã dùng order flow Binance). */
+  /**
+   * Symbol có cấu hình ít nhất một đường dẫn ảnh Bookmap. Symbol dùng order flow Binance spot (cùng thị trường, thay hẳn Bookmap)
+   * bị loại; symbol dùng Binance futures làm đại diện (vàng: XAUUSDT perp) vẫn giữ ảnh Bookmap để chọn.
+   */
   get bookmapSymbols(): string[] {
+    const of = this.opts.binanceOrderflow;
     return Object.entries(this.opts.bookmap?.images ?? {})
-      .filter(([sym, roles]) => Object.values(roles).some(Boolean) && !this.opts.binanceOrderflow?.has(sym))
+      .filter(([sym, roles]) => Object.values(roles).some(Boolean) && !(of?.has(sym) && of.source(sym).market === 'spot'))
       .map(([sym]) => sym);
   }
 
@@ -265,12 +275,30 @@ export class AnalysisService {
       symbol: sym,
       asOf: snap.asOf,
       historyMin: snap.historyMin,
-      basis: snap.basis,
       connected: Boolean(st?.connected && st.synced),
+      offset: snap.offset,
       notes: snap.notes,
       levels: snap.levels,
       wallSegments: snap.wallSegments,
     };
+  }
+
+  /** Thanh lý cho chart (bong bóng theo nến `tf` + heatmap ước tính). */
+  async liquidationLive(symbol: string, tf: string, heatmapAsOf?: number) {
+    const sym = normalizeSymbol(symbol);
+    const liq = this.opts.liquidation;
+    if (!liq?.has(sym)) throw new ServiceError(`Chưa bật thanh lý cho ${symbol}`, 404);
+    if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
+    return liq.live(sym, tfSeconds(tf), heatmapAsOf);
+  }
+
+  /** Volume gộp nhiều sàn (nến đã đóng) cho chart / agent. */
+  async volumeAggregate(symbol: string, tf: string, limit: number) {
+    const sym = normalizeSymbol(symbol);
+    const va = this.opts.volumeAgg;
+    if (!va?.has(sym)) throw new ServiceError(`Chưa bật volume gộp cho ${symbol}`, 404);
+    if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
+    return va.get(sym, tf, limit);
   }
 
   /** Giá chart hiện tại (close nến 1m đang chạy); lỗi → null. */
@@ -301,12 +329,20 @@ export class AnalysisService {
     return snap;
   }
 
-  /** Lấy order flow Binance tại thời điểm job bắt đầu; basis tính theo giá chart (1m) hiện tại. */
+  /** Lấy order flow Binance tại thời điểm job bắt đầu (quy đổi bằng basis trung vị 60 phút). */
   private async takeOrderflowSnapshot(id: string, symbol: string): Promise<BinanceOrderflowSnapshot> {
     const of = this.opts.binanceOrderflow;
     if (!of) throw new Error('Order flow Binance chưa bật');
     const appPrice = await this.chartPrice(symbol);
     const snap = await of.snapshot(symbol, appPrice);
+    const liq = this.opts.liquidation;
+    if (liq?.has(symbol)) {
+      try {
+        snap.liquidation = (await liq.summaryText(symbol, appPrice)) ?? undefined;
+      } catch (err) {
+        snap.notes.push(`Không lấy được dữ liệu thanh lý: ${(err as Error).message}`);
+      }
+    }
     fs.writeFileSync(this.orderflowSnapshotPath(id), JSON.stringify(snap));
     return snap;
   }
@@ -455,7 +491,7 @@ export class AnalysisService {
       if (job.req.hasBinanceOrderflow) {
         const snap = await this.takeOrderflowSnapshot(job.id, job.req.symbol);
         const walls = snap.walls.length;
-        this.emitStep(job.id, `Đã lấy order flow Binance: ${walls} tường, lịch sử sổ lệnh ${Math.round(snap.historyMin)} phút, basis ${snap.basis}`);
+        this.emitStep(job.id, `Đã lấy order flow Binance: ${walls} tường, lịch sử sổ lệnh ${Math.round(snap.historyMin)} phút, basis ${snap.offset}`);
         for (const n of snap.notes) this.emitStep(job.id, n);
       }
       const outcome = await runner.run(
@@ -526,7 +562,7 @@ export class AnalysisService {
       source: 'binance',
       venue: snap.venue,
       asOf: new Date(snap.asOf * 1000).toISOString(),
-      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart; chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
+      note: 'Gọi get_orderflow. Giá trong đó đã quy đổi về giá chart (giá Binance − basis trung vị 60 phút); chỉ nộp orderflow.summary + cvd, server tự gắn levels.',
     };
   }
 

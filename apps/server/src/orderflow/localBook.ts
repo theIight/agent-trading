@@ -1,6 +1,11 @@
-// Sổ lệnh cục bộ đồng bộ theo quy trình của Binance spot:
-// buffer diff → snapshot REST → bỏ diff có u ≤ lastUpdateId → diff đầu phải có U ≤ lastUpdateId+1 ≤ u
-// → các diff sau phải liền mạch (U = u trước + 1), đứt chuỗi thì snapshot lại.
+// Sổ lệnh cục bộ đồng bộ theo quy trình của Binance:
+// - spot: buffer diff → snapshot REST → bỏ diff có u ≤ lastUpdateId → diff đầu phải có U ≤ lastUpdateId+1 ≤ u
+//   → các diff sau phải liền mạch (U = u trước + 1);
+// - futures (USDⓈ-M): bỏ diff có u < lastUpdateId → diff đầu phải có U ≤ lastUpdateId ≤ u
+//   → các diff sau phải có pu = u của diff trước.
+// Đứt chuỗi thì snapshot lại.
+
+export type BookMarket = 'spot' | 'futures';
 
 export type RawLevel = [string, string];
 
@@ -14,6 +19,8 @@ export interface DepthDiff {
   /** Update ID đầu / cuối của event. */
   U: number;
   u: number;
+  /** Futures: u của event trước. */
+  pu?: number;
   b: RawLevel[];
   a: RawLevel[];
 }
@@ -28,6 +35,8 @@ export class LocalBook {
   /** Vùng giá snapshot phủ được; ngoài vùng này sổ lệnh không đầy đủ. */
   coverLow = 0;
   coverHigh = 0;
+
+  constructor(readonly market: BookMarket = 'spot') {}
 
   get isSynced(): boolean {
     return this.synced;
@@ -53,11 +62,20 @@ export class LocalBook {
   /** Áp một diff. `gap` = mất chuỗi, cần snapshot lại. */
   applyDiff(d: DepthDiff): DiffResult {
     if (this.lastId < 0) return 'gap';
-    if (d.u <= this.lastId) return 'stale';
-    if (!this.synced) {
-      if (d.U > this.lastId + 1) return 'gap';
-    } else if (d.U !== this.lastId + 1) {
-      return 'gap';
+    if (this.market === 'futures') {
+      if (d.u < this.lastId) return 'stale';
+      if (!this.synced) {
+        if (d.U > this.lastId) return 'gap';
+      } else if (d.pu !== this.lastId) {
+        return 'gap';
+      }
+    } else {
+      if (d.u <= this.lastId) return 'stale';
+      if (!this.synced) {
+        if (d.U > this.lastId + 1) return 'gap';
+      } else if (d.U !== this.lastId + 1) {
+        return 'gap';
+      }
     }
     for (const [p, q] of d.b) setLevel(this.bids, p, q);
     for (const [p, q] of d.a) setLevel(this.asks, p, q);

@@ -27,6 +27,30 @@ function runnerList(name: string, fallback: RunnerId[]): RunnerId[] {
 }
 
 /** Giá trị số theo symbol từ env `<PREFIX><SYMBOL>`, gộp với mặc định; symbol khác chỉ lấy được qua env. */
+/** `ORDERFLOW_SOURCE_XAUUSD=futures:XAUUSDT` → `{ XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } }`. */
+type OrderflowSourceCfg = { market: 'spot' | 'futures'; symbol: string };
+function orderflowSources(defaults: Record<string, OrderflowSourceCfg>): Record<string, OrderflowSourceCfg> {
+  const out = { ...defaults };
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith('ORDERFLOW_SOURCE_') || !raw) continue;
+    const m = /^(spot|futures):([A-Z0-9]+)$/i.exec(raw.trim());
+    if (m) out[key.slice('ORDERFLOW_SOURCE_'.length).toUpperCase()] = { market: m[1]!.toLowerCase() as 'spot' | 'futures', symbol: m[2]!.toUpperCase() };
+  }
+  return out;
+}
+
+/** `LIQ_OKX_INST_BTCUSDT=BTC-USDT-SWAP:0.01`; giá trị rỗng = tắt OKX cho symbol. */
+function liqOkxInst(defaults: Record<string, { instId: string; ctVal: number }>): Record<string, { instId: string; ctVal: number } | undefined> {
+  const out: Record<string, { instId: string; ctVal: number } | undefined> = { ...defaults };
+  for (const [key, raw] of Object.entries(process.env)) {
+    if (!key.startsWith('LIQ_OKX_INST_') || raw === undefined) continue;
+    const sym = key.slice('LIQ_OKX_INST_'.length).toUpperCase();
+    const m = /^([A-Z0-9-]+):([\d.]+)$/i.exec(raw.trim());
+    out[sym] = m && Number(m[2]) > 0 ? { instId: m[1]!.toUpperCase(), ctVal: Number(m[2]) } : undefined;
+  }
+  return out;
+}
+
 function symbolNums(prefix: string, defaults: Record<string, number>): Record<string, number> {
   const out = { ...defaults };
   for (const [key, raw] of Object.entries(process.env)) {
@@ -100,20 +124,43 @@ export const config = {
   bookmapTolerances: symbolNums('BOOKMAP_TOLERANCE_', { XAUUSD: 3, BTCUSDT: 60 }),
   /** Ảnh chụp cũ hơn số phút này so với lúc gửi → cảnh báo. */
   bookmapMaxAgeMin: int('BOOKMAP_MAX_AGE_MIN', 30),
-  /** Order flow từ Binance spot (server tự ghi sổ lệnh qua WebSocket), thay ảnh Bookmap cho các symbol này. Rỗng = tắt. */
-  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Order flow từ Binance (server tự ghi sổ lệnh qua WebSocket) cho các symbol chart này. Rỗng = tắt. */
+  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? 'BTCUSDT,XAUUSD').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Nguồn Binance của symbol chart, theo `ORDERFLOW_SOURCE_<SYMBOL>=spot|futures:<SYMBOL_BINANCE>`; thiếu = spot cùng tên. */
+  orderflowSources: orderflowSources({ BTCUSDT: { market: 'spot', symbol: 'BTCUSDT' }, XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } }),
   /** Bucket giá khi gom sổ lệnh, theo `ORDERFLOW_BUCKET_<SYMBOL>`. */
-  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10 }),
+  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10, XAUUSD: 1 }),
   /** Tổng lệnh chủ động cùng phía trong 1 giây ≥ khối lượng này (base) → lệnh lớn, theo `ORDERFLOW_BIG_TRADE_<SYMBOL>`.
    *  BTC spot: aggTrade đơn lẻ hiếm khi > 1 BTC; gộp theo giây ≥ 1 BTC ≈ vài chục lần/giờ. */
-  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1 }),
+  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1, XAUUSD: 80 }),
   /** Tổng lệnh lớn chủ động tại một bucket (2 giờ) để xét hấp thụ, theo `ORDERFLOW_ABSORB_<SYMBOL>`. */
-  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8 }),
+  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8, XAUUSD: 300 }),
   /** Khối lượng tối thiểu để một mức tính là tường trong lịch sử tường trên chart, theo `ORDERFLOW_WALL_MIN_<SYMBOL>`. */
-  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8 }),
+  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8, XAUUSD: 500 }),
+  /** Offset dự phòng giá nguồn − giá chart khi chưa tính được basis (trung vị 60 phút), theo `ORDERFLOW_OFFSET_<SYMBOL>`. */
+  orderflowOffsets: symbolNums('ORDERFLOW_OFFSET_', { BTCUSDT: 33, XAUUSD: 0 }),
   orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
   orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
+  /** Chu kỳ snapshot lại theo symbol (`ORDERFLOW_RESYNC_MIN_<SYMBOL>`): futures chỉ chụp được 1000 mức nên chụp lại thường xuyên để vùng phủ theo giá. */
+  orderflowResyncMinBySymbol: symbolNums('ORDERFLOW_RESYNC_MIN_', { XAUUSD: 5 }),
+  /** Thanh lý (bong bóng thật Binance + OKX, heatmap ước tính từ OI Binance) cho các symbol Binance Futures này. Rỗng = tắt. */
+  liqSymbols: (process.env.LIQ_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** `LIQ_OKX_INST_<SYMBOL>=BTC-USDT-SWAP:0.01` (instId:ctVal); rỗng = chỉ Binance. */
+  liqOkxInst: liqOkxInst({ BTCUSDT: { instId: 'BTC-USDT-SWAP', ctVal: 0.01 } }),
+  /** Ngưỡng cụm thanh lý (đồng gốc) ở khung 1m, khung lớn hơn × √(phút), theo `LIQ_MIN_QTY_<SYMBOL>`. */
+  liqMinQty: symbolNums('LIQ_MIN_QTY_', { BTCUSDT: 0.5 }),
+  /** Bucket giá heatmap, theo `LIQ_BUCKET_<SYMBOL>`. */
+  liqBuckets: symbolNums('LIQ_BUCKET_', { BTCUSDT: 50 }),
+  /** Phân bố đòn bẩy giả định `lev:weight,...`. */
+  liqLeverage: process.env.LIQ_LEVERAGE,
+  /** Ký quỹ duy trì giả định. */
+  liqMmr: Number(process.env.LIQ_MMR) > 0 ? Number(process.env.LIQ_MMR) : 0.004,
+  liqRetainH: int('LIQ_RETAIN_H', 72),
+  /** Volume gộp (nến đã đóng): perp Binance Futures + OKX + Bybit, spot Binance. Rỗng = tắt. */
+  volAggSymbols: (process.env.VOLAGG_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  /** Đột biến khi volume nhóm > hệ số này × trung vị 20 nến trước. */
+  volAggSpikeX: Number(process.env.VOLAGG_SPIKE_X) > 1 ? Number(process.env.VOLAGG_SPIKE_X) : 3,
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

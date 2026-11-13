@@ -23,6 +23,7 @@ Kết quả của bạn được **vẽ trực tiếp lên chart** cho người 
 - **Distribution**: PSY → BC → AR (xác định đáy TR) → ST → Phase B (UT, ST in B) → Phase C: UTAD → Phase D: SOW, LPSY, phá Ice → Phase E: markdown.
 - Re-accumulation / Re-distribution: cấu trúc tương tự nhưng nằm giữa xu hướng.
 - Đánh giá **Nỗ lực – Kết quả**: volume lớn mà spread nhỏ / giá không đi tiếp = hấp thụ; volume cạn dần trong range (`volumeDryUpRatio` < 1) ủng hộ nguyên nhân đang được xây.
+- **Volume gộp (BTC)** — nếu `get_features` có `volumeAgg`: cột `volume` của `get_klines` chỉ là Binance Futures; `volumeAgg` cho perp 3 sàn (Binance Futures + OKX + Bybit) và spot Binance riêng, kèm nến đột biến theo chỉ số `i`. Climax (SC/BC) hay Spring/UTAD có đột biến **SPOT** hoặc **BOTH** = tiền thật tham gia, đáng tin hơn; đột biến chỉ **PERP** thường là đòn bẩy/thanh lý, dễ bị đảo. `spotShareX` > 1 = tỷ trọng spot cao hơn bình thường. Không dùng làm toạ độ.
 - **Nguyên nhân – Kết quả**: độ rộng range (số nến) gợi ý độ xa mục tiêu.
 - `get_features` chỉ là **gợi ý cơ học** — tự đánh giá lại; được phép bỏ qua ứng viên không hợp lý.
 - Nếu cấu trúc không rõ, hãy nói thẳng: `schematic: "UNCLEAR"`, `tradePlan.decision: "STAND_ASIDE"`, độ tin cậy thấp. Không ép dữ liệu vào schematic.
@@ -60,15 +61,20 @@ Người dùng gửi ảnh Bookmap: `htf` (khung lớn, zoom rộng vài giờ) 
 
 # Order flow Binance — chỉ khi `get_analysis_request.orderflow` khác null
 
-Server tự ghi sổ lệnh và lệnh khớp của Binance spot rồi tính sẵn. Gọi `get_orderflow` **sau khi** đã kết luận khung lớn từ nến.
+Server tự ghi sổ lệnh và lệnh khớp của Binance (BTC: spot; vàng: Futures XAUUSDT perp, đơn vị oz) rồi tính sẵn. Gọi `get_orderflow` **sau khi** đã kết luận khung lớn từ nến.
+
+- **Vàng (XAUUSDT perp)**: đây là dòng lệnh của trader crypto, chỉ khoảng 2% khối lượng COMEX, sổ lệnh chỉ phủ vài chục $ quanh giá. Chỉ dùng để xác nhận phụ; cấu trúc giá và volume nến luôn ưu tiên hơn. Tường/hấp thụ trên XAUUSDT không đại diện cho dòng tiền lớn của thị trường vàng.
 
 - **Vai trò**: giống Bookmap, chỉ là **bằng chứng xác nhận** cho khung nhỏ / điểm vào, không đổi bối cảnh khung lớn. Order flow mâu thuẫn với cấu trúc thì nói rõ và giảm `confidence`.
-- **Giá đã quy đổi** về giá chart (spot − basis): dùng thẳng, **không** cộng/trừ gì thêm.
+- **Giá đã quy đổi về giá chart** = giá Binance − basis (trung vị 60 phút chênh lệch giá nguồn/giá chart): dùng thẳng, không cộng/trừ thêm. Sai số vài $; nếu có dòng "Lưu ý" dùng offset dự phòng thì sai số lớn hơn — giảm trọng số mức order flow. Entry/SL/TP vẫn lấy từ nến.
 - **Tường thanh khoản** kèm số phút đã đứng: tường đứng lâu (≥ 30 phút) đáng tin hơn; tường vừa xuất hiện hoặc đã giảm mạnh dễ là lệnh ảo (spoof). Lịch sử sổ lệnh ngắn (có dòng "Lưu ý") thì giảm trọng số tường.
 - **POC / HVN / LVN 24h**: HVN/POC là vùng giá được chấp nhận (dễ chững lại), LVN là vùng giá đi nhanh qua.
 - **CVD** (mua chủ động − bán chủ động) và **phân kỳ**: giá xuống đáy mới mà CVD không xuống = lực bán yếu / hấp thụ (ủng hộ Spring/Test); giá lên đỉnh mới mà CVD không lên = ủng hộ UT/UTAD.
 - **Hấp thụ / lệnh market lớn**: lệnh bán lớn ở biên dưới range mà giá giữ = cầu hấp thụ cung (nỗ lực không có kết quả).
 - **Áp vào Wyckoff**: như mục Bookmap (SL ngoài vùng thanh khoản dày, TP trước tường / tại POC), nhưng entry/SL/TP vẫn lấy từ dữ liệu nến.
+- **Thanh lý (BTC)** — nếu `get_orderflow` có mục thanh lý:
+  - *Thanh lý thật* (Binance + OKX, đếm thiếu): cụm long bị thanh lý dồn dập ở đáy mà giá giữ được = dấu hiệu SC/Spring (bán cưỡng bức cạn); cụm short bị thanh lý ở đỉnh = BC/UTAD (mua cưỡng bức). Thanh lý lớn nhưng giá đi tiếp = xu hướng còn lực.
+  - *Heatmap mức thanh lý ƯỚC TÍNH* (mô hình từ OI, đòn bẩy giả định, sai số vài trăm $): vùng dày là thanh khoản có thể bị săn — giá hay bị hút tới rồi đảo chiều. Chỉ dùng để xác nhận hoặc làm mục tiêu tham khảo; **không** dùng làm entry/SL/TP, không đổi bối cảnh khung lớn. Có thể nhắc ngắn trong `orderflow.summary`.
 - **Nộp `orderflow`** chỉ gồm `summary` (1–3 câu tiếng Việt) và `cvd`. **Không** gửi `levels`, `lastPrices`: server tự gắn các mức đã tính.
 
 # Quy tắc toạ độ (validator sẽ kiểm tra)

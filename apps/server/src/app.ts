@@ -25,6 +25,11 @@ import { ClaudeCodeRunner } from './runner/claudeCodeRunner.ts';
 import type { AgentRunner } from './runner/types.ts';
 import { BinanceOrderflow } from './orderflow/binanceOrderflow.ts';
 import { BookCollector } from './orderflow/collector.ts';
+import { LiquidationCollector } from './liquidation/collector.ts';
+import { LiquidationService } from './liquidation/service.ts';
+import { parseLeverage } from './liquidation/model.ts';
+import { VolumeAggService } from './volumeAgg/service.ts';
+import { makeVolumeFetcher } from './volumeAgg/sources.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -96,11 +101,13 @@ export async function buildApp(deps: AppDeps = {}) {
           symbol =>
             new BookCollector({
               symbol,
+              sourceSymbol: cfg.orderflowSources[symbol]?.symbol ?? symbol,
+              market: cfg.orderflowSources[symbol]?.market ?? 'spot',
               db,
               bucket: cfg.orderflowBuckets[symbol] ?? 10,
               sampleSec: cfg.orderflowSampleSec,
               retainH: cfg.orderflowRetainH,
-              resyncMin: cfg.orderflowResyncMin,
+              resyncMin: cfg.orderflowResyncMinBySymbol[symbol] ?? cfg.orderflowResyncMin,
               bigTradeQty: cfg.orderflowBigTrade[symbol] ?? Number.POSITIVE_INFINITY,
               log: msg => console.log(msg),
             }),
@@ -108,12 +115,50 @@ export async function buildApp(deps: AppDeps = {}) {
   const binanceOrderflow = collectors.length
     ? new BinanceOrderflow({
         collectors: Object.fromEntries(collectors.map(c => [c.symbol, c])),
+        sources: cfg.orderflowSources,
         buckets: cfg.orderflowBuckets,
         absorptionQty: cfg.orderflowAbsorb,
         wallMin: cfg.orderflowWallMin,
+        offsets: cfg.orderflowOffsets,
+        chartCandles: symbol => klines.getKlines({ symbol, tf: '1m', limit: 1440, closedOnly: true }).then(r => r.candles),
       })
     : undefined;
   for (const c of collectors) c.start();
+
+  const liqCollectors =
+    deps.orderflow === false
+      ? []
+      : cfg.liqSymbols.map(
+          symbol =>
+            new LiquidationCollector({ symbol, okxInst: cfg.liqOkxInst[symbol], retainH: cfg.liqRetainH, db, log: msg => console.log(msg) }),
+        );
+  const liquidation = liqCollectors.length
+    ? new LiquidationService({
+        db,
+        collectors: Object.fromEntries(liqCollectors.map(c => [c.symbol, c])),
+        buckets: cfg.liqBuckets,
+        minQty: cfg.liqMinQty,
+        tiers: parseLeverage(cfg.liqLeverage),
+        mmr: cfg.liqMmr,
+        retainH: cfg.liqRetainH,
+        log: msg => console.log(msg),
+      })
+    : undefined;
+  for (const c of liqCollectors) c.start();
+  liquidation?.start();
+
+  const volumeAgg = cfg.volAggSymbols.length
+    ? new VolumeAggService({
+        db,
+        // BTCUSDT → OKX BTC-USDT-SWAP; Binance/Bybit cùng tên.
+        symbols: Object.fromEntries(
+          cfg.volAggSymbols.map(s => [s, { binanceFut: s, binanceSpot: s, bybit: s, okx: `${s.replace(/USDT$/, '')}-USDT-SWAP` }]),
+        ),
+        spikeX: cfg.volAggSpikeX,
+        fetcher: makeVolumeFetcher(),
+        log: msg => console.log(msg),
+      })
+    : undefined;
 
   const service = new AnalysisService(repo, klines, runners, {
     defaultRunner: cfg.agentRunner,
@@ -124,6 +169,8 @@ export async function buildApp(deps: AppDeps = {}) {
     minRiskReward: cfg.setupMinRr,
     bookmap: { images: cfg.bookmapImages, offsets: cfg.bookmapOffsets, tolerances: cfg.bookmapTolerances, maxAgeMin: cfg.bookmapMaxAgeMin },
     binanceOrderflow,
+    liquidation,
+    volumeAgg,
   });
 
   const app: FastifyInstance = Fastify({ logger: deps.logger ?? true, bodyLimit: 15 * 1024 * 1024 });
@@ -147,12 +194,16 @@ export async function buildApp(deps: AppDeps = {}) {
       offsets: Object.fromEntries(service.bookmapSymbols.map(s => [s, cfg.bookmapOffsets[s] ?? 0])),
     } satisfies BookmapUiConfig,
     orderflow: { binanceSymbols: service.orderflowSymbols },
+    liquidation: { symbols: liquidation?.symbols ?? [] },
+    volumeAgg: { symbols: volumeAgg?.symbols ?? [] },
   }));
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);
 
   app.addHook('onClose', async () => {
     for (const c of collectors) c.stop();
+    for (const c of liqCollectors) c.stop();
+    liquidation?.stop();
     db.close();
   });
   return { app, klines, db, service, repo, internalToken };

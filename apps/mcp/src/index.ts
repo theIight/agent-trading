@@ -5,11 +5,11 @@ import path from 'node:path';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { analysisSubmissionSchema, normalizeSymbol, RUN_CONTEXT_ENV, SUPPORTED_TFS, type KlinesResponse } from '@wca/shared';
+import { analysisSubmissionSchema, normalizeSymbol, RUN_CONTEXT_ENV, SUPPORTED_TFS, type KlinesResponse, type VolumeAggResponse } from '@wca/shared';
 import { computeFeatures } from '../../server/src/features/index.ts';
 import type { BinanceOrderflowSnapshot } from '../../server/src/orderflow/calc.ts';
 import { formatOrderflowForAgent } from '../../server/src/orderflow/format.ts';
-import { formatKlinesCsv, MIN_BARS, resolveKlineArgs, resolveParam } from './format.ts';
+import { formatKlinesCsv, MIN_BARS, resolveKlineArgs, resolveParam, summarizeVolumeAgg } from './format.ts';
 
 const ROOT = path.resolve(import.meta.dirname, '../../..');
 const SERVER_URL = process.env.WCA_SERVER_URL ?? `http://127.0.0.1:${process.env.PORT ?? 8787}`;
@@ -107,14 +107,25 @@ server.registerTool(
     description:
       'Tính sẵn trên cùng tập nến với get_klines: ATR14, xu hướng Dow, swing high/low (fractal 2/2, nhãn HH/HL/LH/LL), BOS/CHoCH (theo giá đóng cửa), ' +
       'nến climax (volRatio = volume/SMA20, spreadAtr, closePosition 0=đóng đáy 1=đóng đỉnh, isExtreme), ứng viên Trading Range sau SC/BC ' +
-      '(top/bottom, status, probesBelow/Above = ứng viên Spring/UT, volumeDryUpRatio). Đây là GỢI Ý cơ học, cần tự đánh giá lại.',
+      '(top/bottom, status, probesBelow/Above = ứng viên Spring/UT, volumeDryUpRatio). BTC (không truyền endTime): thêm volumeAgg = volume perp 3 sàn + spot Binance ' +
+      '20 nến gần nhất và nến đột biến (SPOT/PERP/BOTH). Đây là GỢI Ý cơ học, cần tự đánh giá lại.',
     inputSchema: klineArgs,
   },
   async ({ symbol, tf: tfRaw, limit: limitRaw, endTime }) => {
     try {
       const { tf, limit, note } = resolveKlineArgs(tfRaw, limitRaw, DEFAULT_BARS);
       const res = await loadKlines(resolveParam(symbol, 'symbol'), tf, limit, endTime);
-      return text(note + JSON.stringify(computeFeatures(res.candles, tf)));
+      const features: Record<string, unknown> = { ...computeFeatures(res.candles, tf) };
+      // Volume gộp nhiều sàn (chỉ symbol bật, chỉ khi xem nến mới nhất — API trả các nến đã đóng gần nhất).
+      if (!endTime) {
+        try {
+          const agg = await call<VolumeAggResponse>(`/api/volume-agg/${encodeURIComponent(res.symbol)}?tf=${tf}&limit=${res.candles.length}`);
+          features.volumeAgg = summarizeVolumeAgg(agg, res.candles.map(c => c.time));
+        } catch {
+          // Symbol không bật volume gộp (404) hoặc lỗi tạm thời: bỏ qua.
+        }
+      }
+      return text(note + JSON.stringify(features));
     } catch (err) {
       return fail((err as Error).message);
     }
@@ -185,7 +196,7 @@ server.registerTool(
     title: 'Order flow Binance',
     description:
       'Order flow do server tự tính từ Binance spot (chỉ khi get_analysis_request có orderflow): tường thanh khoản trong sổ lệnh kèm thời gian đứng, ' +
-      'POC/HVN/LVN 24h, CVD và phân kỳ, lệnh market lớn, vùng hấp thụ. Giá đã quy đổi về giá chart. Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
+      'POC/HVN/LVN 24h, CVD và phân kỳ, lệnh market lớn, vùng hấp thụ. Giá đã quy đổi về giá chart (spot − basis trung vị 60 phút). Chỉ là bằng chứng xác nhận; toạ độ setup vẫn lấy từ get_klines.',
     inputSchema: { analysisId: z.string().optional().describe('Bỏ trống = phân tích đang chạy') },
   },
   async ({ analysisId: idArg }) => {

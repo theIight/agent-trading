@@ -34,9 +34,11 @@ Khai báo đường dẫn ảnh mà Bookmap ghi ra (ghi đè liên tục) trong 
 Với symbol trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT`), server **tự ghi sổ lệnh và lệnh khớp của Binance spot** qua WebSocket công khai (không cần key) thay vì đọc ảnh Bookmap. Panel có tick **"Dùng order flow Binance"** kèm trạng thái ghi. Khi phân tích, server tính tường thanh khoản kèm thời gian đứng (lọc tường ảo), POC/HVN/LVN 24h, CVD + phân kỳ, hấp thụ; agent đọc qua tool `get_orderflow` và chỉ nhận xét, các mức do server gắn và vẽ.
 
 - Mở chart BTC là thấy ngay tường (dày theo khối lượng) + POC, tự làm mới mỗi 15 giây, không cần chạy phân tích. Giống heatmap Bookmap: tường vẽ từ lúc xuất hiện; tường bị giá quét/hấp thụ dừng ở chỗ bị quét (dấu ×); tường bị rút trước khi giá chạm (lệnh ảo) vẽ nét chấm mờ. Ngưỡng tường `ORDERFLOW_WALL_MIN_BTCUSDT` (mặc định 8). Xem rõ nhất ở khung 1m–15m.
-- Giá đã quy đổi tự động từ spot về giá chart (futures) bằng basis đo lúc lấy.
+- Giá order flow quy đổi từ Binance spot về giá chart (futures) bằng **basis = trung vị 60 phút** của chênh lệch giá đóng spot − futures cùng phút: vạch đứng yên giữa các phút, sai số vài $. Tường đã bị quét dùng basis lúc bị quét nên không dịch nữa. Thiếu dữ liệu → `ORDERFLOW_OFFSET_BTCUSDT` (mặc định 33).
 - Binance không có lịch sử sổ lệnh: lịch sử bắt đầu từ lúc server chạy (lưu SQLite 24 giờ, restart không mất). Cần ≥ 30 phút để thời gian đứng của tường đáng tin.
-- Vàng vẫn dùng ảnh Bookmap (Binance không có dữ liệu COMEX). Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để BTC quay lại dùng ảnh.
+- **Volume gộp BTC** (toggle "Volume gộp"): nến đã đóng hiện volume perp 3 sàn (Binance Futures + OKX + Bybit) và phần spot Binance màu cam phía trên; dấu `S` / `P` / `S+P` = đột biến spot / perp / cả hai (> 3× trung vị 20 nến, `VOLAGG_SPIKE_X`). Agent nhận `volumeAgg` trong `get_features`.
+- **Thanh lý BTC** (toggle trên chart): *Thanh lý* = bong bóng thanh lý thật từ Binance + OKX (đỏ = long bị thanh lý, xanh = short; Binance chỉ đẩy 1 lệnh/giây nên đếm thiếu, chỉ có từ lúc server chạy). *Heatmap thanh lý (ước tính)* = mức thanh lý dự kiến tính từ open interest Binance 29 ngày với đòn bẩy giả định (`LIQ_LEVERAGE`) — là mô hình, sai số vài trăm $; mức bị giá quét thì biến mất. Agent nhận tóm tắt cả hai trong `get_orderflow`.
+- Vàng (`XAUUSD`): order flow lấy từ **Binance Futures XAUUSDT perp** (đơn vị oz), vẽ live trên chart giống BTC, basis = trung vị 60 phút XAUUSDT − giá chart. Lưu ý: đây là dòng lệnh crypto (~2% khối lượng COMEX), sổ lệnh chỉ phủ khoảng ±13$ quanh giá → chỉ để xác nhận phụ. Ảnh Bookmap vàng vẫn dùng được; mỗi phân tích chọn một nguồn. Đặt `ORDERFLOW_BINANCE_SYMBOLS=` (rỗng) để tắt.
 
 ## Chạy
 

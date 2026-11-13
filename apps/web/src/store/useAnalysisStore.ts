@@ -74,6 +74,10 @@ interface AnalysisState {
   useBookmap: boolean;
   /** Symbol có order flow Binance (server tự tính). */
   orderflowSymbols: string[];
+  /** Symbol bật thanh lý (bong bóng + heatmap). */
+  liquidationSymbols: string[];
+  /** Symbol bật volume gộp nhiều sàn. */
+  volumeAggSymbols: string[];
   /** Checkbox "Dùng order flow Binance". */
   useOrderflow: boolean;
   /** Offset người dùng sửa theo symbol (không có = mặc định server). */
@@ -123,6 +127,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   bookmapConfig: null,
   useBookmap: load<boolean>(USE_BOOKMAP_KEY, false),
   orderflowSymbols: [],
+  liquidationSymbols: [],
+  volumeAggSymbols: [],
   useOrderflow: load<boolean>(USE_ORDERFLOW_KEY, true),
   bookmapOffsets: load<Record<string, number>>(BOOKMAP_OFFSETS_KEY, {}),
   runners: [],
@@ -157,7 +163,7 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   loadConfig: async () => {
     try {
       const cfg = await fetchConfig();
-      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [] });
+      set({ bookmapConfig: cfg.bookmap ?? null, orderflowSymbols: cfg.orderflow?.binanceSymbols ?? [], liquidationSymbols: cfg.liquidation?.symbols ?? [], volumeAggSymbols: cfg.volumeAgg?.symbols ?? [] });
     } catch {
       /* server chưa chạy */
     }
@@ -236,7 +242,8 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
       const model = runner ? runnerModels[runner] || undefined : undefined;
       // Ảnh Bookmap do server đọc từ đường dẫn cấu hình, lúc job bắt đầu chạy.
       const bookmap = bookmapEnabled(get(), symbol, info) ? { offset: bookmapOffsetOf(get(), symbol) } : undefined;
-      const orderflow = orderflowEnabled(get(), symbol) || undefined;
+      // Mỗi phân tích một nguồn order flow: symbol có cả hai (vàng) → ảnh Bookmap được chọn thì ưu tiên ảnh.
+      const orderflow = (!bookmap && orderflowEnabled(get(), symbol)) || undefined;
       const rec = await startAnalysis({ symbol, primaryTf: tf, contextTfs, screenshot, runner: runner ?? undefined, model, bookmap, orderflow });
       const order = sortTopDown(rec.tfs as Timeframe[]).join(' → ');
       const who = `${info?.label ?? rec.runner ?? 'agent'} · ${model ?? info?.defaultModel ?? 'model mặc định'}`;

@@ -76,3 +76,27 @@ describe('ngữ cảnh lượt chạy cho MCP', () => {
     expect(describeToolUse('get_klines', { tf: '1h', limit: 300 })).toBe('Đọc nến 1h (300 nến)');
   });
 });
+
+describe('summarizeVolumeAgg', () => {
+  it('gắn chỉ số i theo tập nến, spotShareX so với trung vị, chỉ đột biến trong tập', async () => {
+    const { summarizeVolumeAgg } = await import('../apps/mcp/src/format.ts');
+    const v = (b: number, o: number, y: number, s: number | null) => ({ binanceFut: b, okx: o, bybit: y, binanceSpot: s });
+    const bars = [0, 60, 120].map((time, k) => ({
+      time,
+      perp: 100,
+      spot: [10, 10, 30][k]!,
+      venues: v(50, 30, 20, [10, 10, 30][k]!),
+      perpComplete: true,
+    }));
+    const out = summarizeVolumeAgg(
+      { symbol: 'BTCUSDT', tf: '1m', bars, spikeX: 3, notes: [], spikes: [{ time: 120, kind: 'SPOT', perpX: 1, spotX: 3.5 }, { time: 999, kind: 'PERP', perpX: 4, spotX: 1 }] },
+      [60, 120],
+    );
+    expect(out.recent).toEqual([
+      { i: 0, time: 60, perp: 100, spot: 10, spotShareX: 1, perpComplete: true },
+      { i: 1, time: 120, perp: 100, spot: 30, spotShareX: 3, perpComplete: true },
+    ]);
+    expect(out.spikes).toEqual([{ i: 1, time: 120, kind: 'SPOT', perpX: 1, spotX: 3.5 }]);
+    expect(out.warnings).toBeUndefined();
+  });
+});

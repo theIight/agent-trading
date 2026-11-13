@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -8,6 +8,20 @@ export interface ServerConfig {
   agentMaxTfs: number;
   bookmap?: BookmapUiConfig;
   orderflow?: { binanceSymbols: string[] };
+  liquidation?: { symbols: string[] };
+  volumeAgg?: { symbols: string[] };
+}
+
+/** Volume gộp nhiều sàn (nến đã đóng) + đột biến. */
+export function fetchVolumeAgg(symbol: string, tf: Timeframe, limit: number): Promise<VolumeAggResponse> {
+  return request(`/api/volume-agg/${encodeURIComponent(symbol)}?${new URLSearchParams({ tf, limit: String(limit) })}`);
+}
+
+/** Thanh lý cho chart: bong bóng theo nến khung `tf` + heatmap ước tính. */
+export function fetchLiquidations(symbol: string, tf: Timeframe, heatmapAsOf?: number): Promise<LiveLiquidations> {
+  const params = new URLSearchParams({ tf });
+  if (heatmapAsOf) params.set('heatmapAsOf', String(heatmapAsOf));
+  return request(`/api/liquidations/${encodeURIComponent(symbol)}?${params}`);
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
@@ -64,6 +78,10 @@ export function fetchBookmapStatus(symbol: string): Promise<{ now: number; image
 export interface OrderflowStatus {
   now: number;
   symbol: string;
+  sourceSymbol?: string;
+  market?: 'spot' | 'futures';
+  coverLow?: number;
+  coverHigh?: number;
   connected: boolean;
   synced: boolean;
   since: number | null;
@@ -83,8 +101,9 @@ export interface LiveOrderflow {
   symbol: string;
   asOf: number;
   historyMin: number;
-  basis: number;
   connected: boolean;
+  /** Basis spot − chart đã dùng (trung vị 60 phút). */
+  offset: number;
   notes: string[];
   levels: OrderflowLevel[];
   /** Lịch sử tường 24h (giá đã quy đổi). */

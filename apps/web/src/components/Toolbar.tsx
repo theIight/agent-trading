@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react';
 import { SUPPORTED_TFS, WATCHLIST, normalizeSymbol, tfLabel } from '@wca/shared';
 import { useAppStore } from '../store/useAppStore.ts';
+import { SettingsButton } from './SettingsButton.tsx';
 
 export function Toolbar({ status }: { status: string }) {
   const { symbol, tf, theme, setSymbol, setTf, toggleTheme } = useAppStore();
@@ -53,6 +54,7 @@ export function Toolbar({ status }: { status: string }) {
       </div>
       <div className="spacer" />
       <span className={`status ${status === 'Live' ? 'live' : ''}`}>{status}</span>
+      <SettingsButton />
       <button type="button" className="icon-btn" onClick={toggleTheme} title="Đổi giao diện sáng/tối">
         {theme === 'dark' ? '☀' : '☾'}
       </button>

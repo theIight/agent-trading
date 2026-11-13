@@ -318,17 +318,17 @@ export const LABEL_HEIGHT = 12;
  * Giãn nhãn theo chiều dọc để không đè nhau: nhãn sau trùng nhãn trước thì thử dịch xuống/lên
  * từng bậc LABEL_HEIGHT (tối đa `maxSteps` bậc mỗi phía). Trả về y mới theo thứ tự đầu vào.
  */
-export function layoutLabels(labels: readonly LabelBox[], maxSteps = 4): number[] {
+export function layoutLabels(labels: readonly LabelBox[], maxSteps = 4, labelHeight = LABEL_HEIGHT): number[] {
   const placed: { left: number; right: number; y: number }[] = [];
   const hits = (left: number, right: number, y: number) =>
-    placed.some(p => left < p.right && right > p.left && Math.abs(y - p.y) < LABEL_HEIGHT);
+    placed.some(p => left < p.right && right > p.left && Math.abs(y - p.y) < labelHeight);
   return labels.map(l => {
     const left = l.align === 'left' ? l.x : l.align === 'right' ? l.x - l.width : l.x - l.width / 2;
     const right = left + l.width;
     let y = l.y;
     for (let step = 1; hits(left, right, y) && step <= maxSteps; step++) {
-      if (!hits(left, right, l.y + step * LABEL_HEIGHT)) y = l.y + step * LABEL_HEIGHT;
-      else if (!hits(left, right, l.y - step * LABEL_HEIGHT)) y = l.y - step * LABEL_HEIGHT;
+      if (!hits(left, right, l.y + step * labelHeight)) y = l.y + step * labelHeight;
+      else if (!hits(left, right, l.y - step * labelHeight)) y = l.y - step * labelHeight;
     }
     placed.push({ left, right, y });
     return y;

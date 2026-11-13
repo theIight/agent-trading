@@ -17,6 +17,7 @@ import {
 import { fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import {
+  bookmapEnabled,
   bookmapOffsetOf,
   bookmapSupported,
   useAnalysisStore,
@@ -183,11 +184,15 @@ function OrderflowStatusLine({ symbol }: { symbol: string }) {
   if (error) return <div className="bm-meta down">{error}</div>;
   if (!st) return <div className="muted bm-meta">Đang đọc trạng thái…</div>;
   const live = st.connected && st.synced;
+  const futures = st.market === 'futures';
+  const venue = futures ? `Binance Futures ${st.sourceSymbol ?? ''} perp` : 'Binance spot';
+  const cover = futures && st.coverHigh && st.coverLow ? (st.coverHigh - st.coverLow) / 2 : 0;
   const lag = st.lastSampleAt ? st.now - st.lastSampleAt : null;
   return (
     <div className={`bm-meta of-status ${live ? 'muted' : 'down'}`}>
-      {live ? 'Đang ghi sổ lệnh Binance spot' : 'Mất kết nối Binance — đang thử lại'}
-      {st.spotPrice != null && <> · spot {fmtPrice(st.spotPrice)}</>}
+      {live ? `Đang ghi sổ lệnh ${venue}` : 'Mất kết nối Binance — đang thử lại'}
+      {st.spotPrice != null && <> · giá {fmtPrice(st.spotPrice)}</>}
+      {futures && cover > 0 && <> · sổ lệnh phủ ±{Math.round(cover)}$</>}
       {' · '}lịch sử {st.historyMin} phút
       {st.historyMin < OF_MIN_HISTORY_MIN && <> (cần ≥ {OF_MIN_HISTORY_MIN} phút để tin tường)</>}
       {lag != null && lag > 120 && <> · mẫu cuối {fmtAge(lag)}</>}
@@ -197,15 +202,19 @@ function OrderflowStatusLine({ symbol }: { symbol: string }) {
 }
 
 function OrderflowControls({ symbol, disabled }: { symbol: string; disabled: boolean }) {
-  const { orderflowSymbols, useOrderflow, setUseOrderflow } = useAnalysisStore();
+  const state = useAnalysisStore();
+  const { orderflowSymbols, useOrderflow, setUseOrderflow, runners, runner } = state;
   if (!orderflowSymbols.includes(symbol)) return null;
+  // Mỗi phân tích một nguồn: đang dùng ảnh Bookmap (vàng) thì order flow Binance tạm bỏ.
+  const byBookmap = bookmapEnabled(state, symbol, runners.find(r => r.id === runner));
   return (
     <div className="bookmap">
       <label className="check">
-        <input type="checkbox" checked={useOrderflow} disabled={disabled} onChange={e => setUseOrderflow(e.target.checked)} />
+        <input type="checkbox" checked={useOrderflow && !byBookmap} disabled={disabled || byBookmap} onChange={e => setUseOrderflow(e.target.checked)} />
         Dùng order flow Binance
+        {byBookmap && <span className="muted"> (đang dùng ảnh Bookmap — bỏ chọn ảnh để dùng)</span>}
       </label>
-      {useOrderflow && <OrderflowStatusLine symbol={symbol} />}
+      {useOrderflow && !byBookmap && <OrderflowStatusLine symbol={symbol} />}
     </div>
   );
 }
@@ -490,8 +499,9 @@ function LegacyAction({ a }: { a: AnalysisResult }) {
 }
 
 function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
-  const unit = bookmapSizeUnit(symbol);
   const binance = of.source === 'binance';
+  // Order flow Binance vàng lấy từ XAUUSDT perp (1 hợp đồng = 1 oz); ảnh Bookmap vàng tính theo lot.
+  const unit = binance && symbol === 'XAUUSD' ? 'oz' : bookmapSizeUnit(symbol);
   const drift = of.measuredOffset !== undefined && of.offset !== undefined ? of.measuredOffset - of.offset : undefined;
   return (
     <div className="orderflow">
@@ -531,8 +541,14 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
       )}
       {binance ? (
         <div className="muted note">
-          Binance spot{of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>} · basis spot − chart {of.offset ?? 0}
+          {symbol === 'XAUUSD' ? 'Binance Futures XAUUSDT perp' : 'Binance spot'}, quy đổi về giá chart bằng basis {of.offset ?? 0} (trung vị 60 phút){of.asOf !== undefined && <> · lấy lúc {fmtDateTime(of.asOf)}</>}
           {of.historyMin !== undefined && <> · lịch sử sổ lệnh {Math.round(of.historyMin)} phút</>}
+          {of.liquidation && (
+            <details className="liq-summary">
+              <summary>Thanh lý + heatmap ước tính lúc phân tích</summary>
+              <pre>{of.liquidation}</pre>
+            </details>
+          )}
         </div>
       ) : (
       <div className="muted note">

@@ -6,10 +6,12 @@ import { cvdText, type BinanceOrderflowSnapshot } from './calc.ts';
 const iso = (t: number) => new Date(t * 1000).toISOString().replace('.000Z', 'Z');
 
 export function formatOrderflowForAgent(s: BinanceOrderflowSnapshot): string {
-  const toApp = (p: number) => Math.round((p - s.basis) * 100) / 100;
+  const toApp = (p: number) => Math.round((p - s.offset) * 100) / 100;
   const lines: string[] = [
     `Order flow ${s.symbol} — ${s.venue}, lấy lúc ${iso(s.asOf)}. Lịch sử sổ lệnh dùng để tính: ${Math.round(s.historyMin)} phút.`,
-    `Giá spot ${s.spotPrice}; giá chart (futures) ${s.appPrice ?? 'không rõ'}; basis = ${s.basis} → MỌI giá dưới đây ĐÃ quy đổi về giá chart (spot − basis), dùng thẳng được.`,
+    `MỌI giá dưới đây ĐÃ quy đổi về giá chart = giá ${s.venue} − basis ${s.offset} (trung vị 60 phút giá nguồn − giá chart). Lúc lấy: giá nguồn ${s.spotPrice}, giá chart ${s.appPrice ?? 'không rõ'}` +
+      (s.appPrice != null ? ` (chênh lệch thực tế ${Math.round((s.spotPrice - s.appPrice) * 100) / 100})` : '') +
+      '. Sai số quy đổi vài $; entry/SL/TP vẫn lấy từ get_klines.',
     ...s.notes.map(n => `Lưu ý: ${n}`),
     '',
     'Mức (server tính, sẽ tự vẽ lên chart; KHÔNG chép vào orderflow.levels):',
@@ -26,6 +28,7 @@ export function formatOrderflowForAgent(s: BinanceOrderflowSnapshot): string {
     lines.push('', `Lệnh market lớn nhất 4 giờ qua (bên chủ động):`);
     for (const t of s.bigTrades) lines.push(`- ${iso(t.t)} ${t.side === 'BUY' ? 'MUA' : 'BÁN'} ${t.qty} ${s.unit} @ ${toApp(t.price)}`);
   }
+  if (s.liquidation) lines.push('', s.liquidation);
   lines.push(
     '',
     'Cách dùng: order flow chỉ để xác nhận/bác bỏ kịch bản Wyckoff (spring/test/upthrust, hấp thụ, tường chặn). Không dùng làm toạ độ entry/SL/TP trừ khi trùng cấu trúc giá. ' +

@@ -13,12 +13,15 @@ import {
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import type { Candle, Timeframe } from '@wca/shared';
+import type { Candle, Timeframe, VolumeAggBar, VolumeSource } from '@wca/shared';
 import type { InstrumentInfo } from '@wca/shared';
 import { fetchInstrument, fetchKlines } from '../api/client.ts';
 import { subscribeLiveKlines, subscribeServerLive } from './liveFeed.ts';
 import { countdownLabel, updateSkew } from './countdown.ts';
 import { CountdownPrimitive } from './CountdownPrimitive.ts';
+import { SpikeLabelPrimitive } from './SpikeLabelPrimitive.ts';
+import { buildVolumeView } from './volumeView.ts';
+import { display } from './displaySettings.ts';
 import { THEMES, type ThemeName } from './theme.ts';
 
 const INITIAL_BARS = 800;
@@ -28,7 +31,12 @@ const LOAD_MORE_THRESHOLD = 30;
 export interface LegendData {
   candle: Candle | null;
   change: number | null;
+  /** Volume gộp của nến (chỉ nến đã đóng, khi bật "Volume gộp"). */
+  volAgg?: VolumeAggBar;
 }
+
+/** Màu phần spot trong cột volume gộp. */
+export const SPOT_VOLUME_COLOR = 'rgba(255,152,0,0.8)';
 
 export interface ChartListeners {
   onLegend?: (data: LegendData) => void;
@@ -69,6 +77,13 @@ export class ChartController {
   readonly chart: IChartApi;
   readonly candleSeries: ISeriesApi<'Candlestick'>;
   readonly volumeSeries: ISeriesApi<'Histogram'>;
+  /** Volume gộp: cột perp + spot (vẽ sau cột perp), chỉ nến đã đóng. */
+  private readonly spotVolumeSeries: ISeriesApi<'Histogram'>;
+  private readonly spikeLabels = new SpikeLabelPrimitive();
+  private volAgg: Map<number, VolumeAggBar> | null = null;
+  private volSource: VolumeSource = 'futures';
+  /** Nến đang chạy chưa có volume của nguồn đã chọn. */
+  private volRunningMissing = false;
   private candles: Candle[] = [];
   private symbol = '';
   private tf: Timeframe = '4h';
@@ -89,6 +104,14 @@ export class ChartController {
       rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 } },
     });
     this.candleSeries = this.chart.addSeries(CandlestickSeries, { borderVisible: false });
+    // Thêm trước cột perp để nằm phía sau (cột spot = perp + spot, phần nhô lên là spot).
+    this.spotVolumeSeries = this.chart.addSeries(HistogramSeries, {
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume',
+      lastValueVisible: false,
+      priceLineVisible: false,
+      color: SPOT_VOLUME_COLOR,
+    });
     this.volumeSeries = this.chart.addSeries(HistogramSeries, {
       priceFormat: { type: 'volume' },
       priceScaleId: 'volume',
@@ -96,6 +119,8 @@ export class ChartController {
       priceLineVisible: false,
     });
     this.chart.priceScale('volume').applyOptions({ scaleMargins: { top: 0.82, bottom: 0 } });
+    // Gắn vào cột chính (luôn có dữ liệu); cột spot chồng rỗng khi xem nguồn đơn lẻ → không quy đổi được toạ độ.
+    this.volumeSeries.attachPrimitive(this.spikeLabels);
     // Đếm ngược đóng nến dưới nhãn giá hiện tại.
     this.candleSeries.attachPrimitive(
       new CountdownPrimitive({
@@ -103,7 +128,7 @@ export class ChartController {
           const last = this.candles.at(-1);
           if (!last) return null;
           const text = countdownLabel(last.time, this.tf, (Date.now() + this.clockSkewMs) / 1000);
-          if (text === null) return null;
+          if (text === null || !display().showCountdown) return null;
           const t = THEMES[this.theme];
           return { text, price: last.close, color: last.close >= last.open ? t.up : t.down };
         },
@@ -133,7 +158,7 @@ export class ChartController {
     this.theme = name;
     const t = THEMES[name];
     this.chart.applyOptions({
-      layout: { background: { type: ColorType.Solid, color: t.background }, textColor: t.text, fontSize: 12 },
+      layout: { background: { type: ColorType.Solid, color: t.background }, textColor: t.text, fontSize: display().axisFontPx },
       grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
       rightPriceScale: { borderColor: t.border },
       timeScale: { borderColor: t.border },
@@ -148,13 +173,47 @@ export class ChartController {
       wickUpColor: t.up,
       wickDownColor: t.down,
     });
-    if (this.candles.length) this.volumeSeries.setData(this.candles.map(c => this.toVolume(c)));
+    if (this.candles.length) this.refreshVolume();
+  }
+
+  /** Volume theo nguồn (nến đã đóng); data null hoặc nguồn `futures` = volume Binance Futures như cũ. */
+  setVolumeAggregate(data: { bars: readonly VolumeAggBar[] } | null, source: VolumeSource): void {
+    this.volAgg = data && source !== 'futures' ? new Map(data.bars.map(b => [b.time, b])) : null;
+    this.volSource = source;
+    this.refreshVolume();
+  }
+
+  /** Nến đang chạy chưa có volume của nguồn đã chọn (nguồn đơn lẻ / tổng). */
+  isRunningVolumeMissing(): boolean {
+    return this.volRunningMissing;
+  }
+
+  /** Áp lại cài đặt hiển thị (cỡ chữ trục, ngưỡng đột biến, đếm ngược). */
+  applyDisplay(): void {
+    this.chart.applyOptions({ layout: { fontSize: display().axisFontPx } });
+    this.refreshVolume();
+  }
+
+  private refreshVolume(): void {
+    const t = THEMES[this.theme];
+    const view = buildVolumeView(this.candles, this.volAgg, this.volSource, display().spikeX, {
+      up: t.upVolume,
+      down: t.downVolume,
+      upSolid: t.upVolumeSolid,
+      downSolid: t.downVolumeSolid,
+    });
+    this.volRunningMissing = view.runningMissing;
+    this.volumeSeries.setData(view.main.map(v => ({ ...v, time: v.time as UTCTimestamp })) as HistogramData[]);
+    this.spotVolumeSeries.setData(view.spot.map(v => ({ ...v, time: v.time as UTCTimestamp })) as HistogramData[]);
+    this.spikeLabels.setLabels(view.labels);
   }
 
   /** Tải dữ liệu cho symbol/khung mới và kết nối realtime. */
   async load(symbol: string, tf: Timeframe): Promise<void> {
     const token = ++this.loadToken;
     const symbolChanged = symbol !== this.symbol;
+    // Volume gộp thuộc symbol/khung cũ (mốc thời gian có thể trùng, vd 1h và 4h) → bỏ, chờ bản mới.
+    this.volAgg = null;
     this.symbol = symbol;
     this.tf = tf;
     this.noMoreHistory = false;
@@ -239,7 +298,9 @@ export class ChartController {
     if (last && c.time === last.time) this.candles[this.candles.length - 1] = c;
     else this.candles.push(c);
     this.candleSeries.update(this.toCandle(c));
-    this.volumeSeries.update(this.toVolume(c));
+    // Nguồn đơn lẻ / tổng: nến đang chạy chưa có volume của nguồn đó → để trống.
+    const single = this.volAgg && this.volSource !== 'futures' && this.volSource !== 'stacked';
+    this.volumeSeries.update(single && !this.volAgg!.has(c.time) ? ({ time: c.time as UTCTimestamp } as HistogramData) : this.toVolume(c));
     if (!this.crosshairActive) this.emitLegend(c);
     if (!last || c.time !== last.time) this.listeners.onDataChange?.(this.candles);
   }
@@ -288,7 +349,7 @@ export class ChartController {
   private setAllData(): void {
     this.applyPriceFormat();
     this.candleSeries.setData(this.candles.map(c => this.toCandle(c)));
-    this.volumeSeries.setData(this.candles.map(c => this.toVolume(c)));
+    this.refreshVolume();
     this.listeners.onDataChange?.(this.candles);
   }
 
@@ -308,7 +369,8 @@ export class ChartController {
   private emitLegend(candle: Candle | null, idx = this.candles.length - 1): void {
     const prev = idx > 0 ? this.candles[idx - 1] : undefined;
     const change = candle && prev ? ((candle.close - prev.close) / prev.close) * 100 : null;
-    this.listeners.onLegend?.({ candle, change });
+    const volAgg = candle ? this.volAgg?.get(candle.time) : undefined;
+    this.listeners.onLegend?.({ candle, change, ...(volAgg ? { volAgg } : {}) });
   }
 
   private toCandle(c: Candle): CandlestickData {
@@ -317,6 +379,10 @@ export class ChartController {
 
   private toVolume(c: Candle): HistogramData {
     const t = THEMES[this.theme];
-    return { time: c.time as UTCTimestamp, value: c.volume, color: c.close >= c.open ? t.upVolume : t.downVolume };
+    // Bật volume gộp: nến đã đóng dùng tổng perp 3 sàn; nến đang chạy giữ volume Binance Futures.
+    const agg = this.volAgg?.get(c.time);
+    const up = c.close >= c.open;
+    if (agg) return { time: c.time as UTCTimestamp, value: agg.perp, color: up ? t.upVolumeSolid : t.downVolumeSolid };
+    return { time: c.time as UTCTimestamp, value: c.volume, color: up ? t.upVolume : t.downVolume };
   }
 }

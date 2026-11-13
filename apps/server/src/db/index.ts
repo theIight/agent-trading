@@ -43,6 +43,31 @@ const MIGRATIONS: string[] = [
      side TEXT NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS idx_big_trades ON big_trades(symbol, t);`,
+  // Thanh lý thật (đã gộp theo giây/sàn/phía) + open interest 5 phút cho heatmap thanh lý ước tính.
+  `CREATE TABLE IF NOT EXISTS liquidations (
+     symbol TEXT NOT NULL,
+     venue TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     side TEXT NOT NULL,
+     price REAL NOT NULL,
+     qty REAL NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_liquidations ON liquidations(symbol, t);`,
+  `CREATE TABLE IF NOT EXISTS open_interest (
+     symbol TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     oi REAL NOT NULL,
+     PRIMARY KEY (symbol, t)
+   ) WITHOUT ROWID;`,
+  // Volume nến đã đóng từng sàn (volume gộp).
+  `CREATE TABLE IF NOT EXISTS venue_volume (
+     symbol TEXT NOT NULL,
+     venue TEXT NOT NULL,
+     tf TEXT NOT NULL,
+     t INTEGER NOT NULL,
+     volume REAL NOT NULL,
+     PRIMARY KEY (symbol, venue, tf, t)
+   ) WITHOUT ROWID;`,
 ];
 
 export function openDb(dbPath: string): Db {
