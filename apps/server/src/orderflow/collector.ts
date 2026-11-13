@@ -1,5 +1,5 @@
 import type { Db } from '../db/index.ts';
-import { LocalBook, sampleBook, type BookMarket, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
+import { LocalBook, applyDiffsToLevels, nearCoverEdge, sampleBook, type BookLevels, type BookMarket, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
 import type { BigTrade } from './calc.ts';
 
 // Collector sổ lệnh + lệnh khớp lớn của Binance spot / USDⓈ-M futures (WebSocket công khai, không cần key).
@@ -47,6 +47,10 @@ export interface CollectorOptions {
   retainH: number;
   /** Snapshot lại định kỳ để làm mới vùng giá phủ được. */
   resyncMin: number;
+  /** Giá còn cách mép vùng phủ < N% độ rộng phía đó → snapshot lại (0 = tắt). */
+  edgeResyncPct?: number;
+  /** Khoảng cách tối thiểu giữa 2 lần snapshot do chạm mép (giây). */
+  edgeResyncMinSec?: number;
   /** Tổng lệnh chủ động cùng phía trong 1 giây ≥ khối lượng này được lưu (giống bong bóng Bookmap). */
   bigTradeQty: number;
   db: Db;
@@ -70,8 +74,14 @@ export interface CollectorStatus {
   lastSampleAt: number | null;
   historyMin: number;
   spotPrice: number | null;
+  /** Số mức đang giữ ngoài vùng phủ snapshot (đã nhận diff). */
+  farLevels?: number;
+  lastResyncReason?: string | null;
   error?: string;
 }
+
+/** Lý do snapshot lại mà luồng diff vẫn liền mạch → giữ được các mức ngoài vùng phủ mới. */
+const CARRY_REASONS = new Set(['định kỳ', 'gần mép vùng phủ']);
 
 interface SampleRow {
   t: number;
@@ -91,6 +101,8 @@ export class BookCollector {
   private stopped = true;
   private timers: ReturnType<typeof setInterval>[] = [];
   private lastError: string | undefined;
+  private lastResyncReason: string | null = null;
+  private lastEdgeResyncAt = Number.NEGATIVE_INFINITY;
   /** Lệnh chủ động đang gộp theo giây: key `${giây}:${side}`. */
   private pendingTrades = new Map<string, { t: number; side: 'BUY' | 'SELL'; qty: number; notional: number }>();
   private readonly fetchImpl: typeof fetch;
@@ -148,6 +160,8 @@ export class BookCollector {
       lastSampleAt: range.hi,
       historyMin: range.lo != null && range.hi != null ? Math.round((range.hi - range.lo) / 60) : 0,
       spotPrice: this.book.mid() ?? null,
+      farLevels: this.book.isSynced ? this.book.farLevelCount() : 0,
+      lastResyncReason: this.lastResyncReason,
       ...(this.lastError ? { error: this.lastError } : {}),
     };
   }
@@ -272,13 +286,17 @@ export class BookCollector {
   /** Snapshot REST rồi áp các diff đang buffer. */
   async resync(reason: string): Promise<void> {
     if (this.syncing || this.stopped) return;
+    // Luồng diff liền mạch thì toàn bộ sổ hiện tại vẫn đúng → giữ phần nằm ngoài vùng phủ của snapshot mới.
+    const carry: BookLevels | undefined = CARRY_REASONS.has(reason) && this.book.isSynced ? this.book.levels() : undefined;
     this.syncing = true;
     try {
       for (let attempt = 0; attempt < 3 && !this.stopped; attempt++) {
         const snap = await this.fetchSnapshot();
-        this.book.applySnapshot(snap);
         const pending = this.buffer;
         this.buffer = [];
+        // Áp mọi diff đã buffer (kể cả diff cũ hơn snapshot) lên phần giữ lại để không sót thay đổi trong lúc chụp.
+        if (carry) applyDiffsToLevels(carry, pending);
+        this.book.applySnapshot(snap, carry);
         let gap = false;
         for (const diff of pending) {
           if (this.book.applyDiff(diff) === 'gap') {
@@ -288,6 +306,7 @@ export class BookCollector {
         }
         if (!gap) {
           this.lastError = undefined;
+          this.lastResyncReason = reason;
           this.opts.log?.(`[orderflow] ${this.opts.symbol} đồng bộ sổ lệnh (${reason}), lastUpdateId=${this.book.lastUpdateId}`);
           return;
         }
@@ -320,7 +339,19 @@ export class BookCollector {
     this.opts.db
       .prepare('INSERT OR REPLACE INTO book_samples (symbol, t, data) VALUES (?, ?, ?)')
       .run(this.opts.symbol, s.t, JSON.stringify(s));
+    this.maybeEdgeResync(s.mid);
     return s;
+  }
+
+  /** Giá tới gần mép vùng phủ → snapshot lại sớm (giới hạn tần suất). */
+  private maybeEdgeResync(mid: number): void {
+    const pct = this.opts.edgeResyncPct ?? 0;
+    if (this.syncing || !this.book.isSynced) return;
+    if (!nearCoverEdge(mid, this.book.coverLow, this.book.coverHigh, this.book.snapMid, pct)) return;
+    const now = this.now();
+    if (now - this.lastEdgeResyncAt < (this.opts.edgeResyncMinSec ?? 60)) return;
+    this.lastEdgeResyncAt = now;
+    void this.resync('gần mép vùng phủ');
   }
 
   private prune(): void {

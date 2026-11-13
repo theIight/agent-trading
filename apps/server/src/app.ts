@@ -108,6 +108,8 @@ export async function buildApp(deps: AppDeps = {}) {
               sampleSec: cfg.orderflowSampleSec,
               retainH: cfg.orderflowRetainH,
               resyncMin: cfg.orderflowResyncMinBySymbol[symbol] ?? cfg.orderflowResyncMin,
+              edgeResyncPct: cfg.orderflowEdgeResyncPct,
+              edgeResyncMinSec: cfg.orderflowEdgeResyncMinSec,
               bigTradeQty: cfg.orderflowBigTrade[symbol] ?? Number.POSITIVE_INFINITY,
               log: msg => console.log(msg),
             }),

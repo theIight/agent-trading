@@ -21,7 +21,7 @@
 3. **Map symbol**: symbol trên chart `XAUUSD` lấy dữ liệu nguồn `XAUUSDT`, cấu hình bằng `ORDERFLOW_SOURCE_XAUUSD=futures:XAUUSDT`. BTC giữ `spot:BTCUSDT` như hiện tại, không đổi hành vi.
 4. **Phạm vi giá**: vùng mỗi lần lấy mẫu = vùng ảnh chụp REST phủ được tại lần đồng bộ gần nhất, khoảng ±13$.
    - Muốn phủ rộng hơn thì đặt `ORDERFLOW_RESYNC_MIN_XAUUSD` nhỏ, mặc định 5 phút (khi làm hạ từ 10 xuống 5 vì vàng đi 5–20$ trong 10 phút). Đồng bộ lại sẽ chụp sổ lệnh mới quanh giá hiện tại.
-   - Không dùng các mức nằm ngoài vùng ảnh chụp, vì chúng chỉ đến từ luồng cập nhật và không đáng tin.
+   - Không dùng các mức nằm ngoài vùng ảnh chụp, vì chúng chỉ đến từ luồng cập nhật và không đáng tin. *(Đã thay bởi `plans/orderflow-coverage.md` ngày 2026-11-13: mức đã nhận diff có khối lượng tuyệt đối nên được dùng; thêm snapshot lại khi chạm mép vùng phủ.)*
    - Agent và panel ghi rõ "sổ lệnh chỉ phủ ±N$ quanh giá".
 5. **Quy đổi giá**: basis = trung vị 60 phút của `close XAUUSDT − close chart XAUUSD` cùng phút, giống BTC.
    - Nến chart lấy qua `KlineService` (`XAUUSD`, 1m, closedOnly), dùng đúng nguồn chart đang chạy.

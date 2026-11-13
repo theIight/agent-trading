@@ -88,6 +88,9 @@ export interface OrderflowStatus {
   lastSampleAt: number | null;
   historyMin: number;
   spotPrice: number | null;
+  /** Số mức đang giữ ngoài vùng phủ snapshot (đã nhận diff). */
+  farLevels?: number;
+  lastResyncReason?: string | null;
   error?: string;
 }
 
