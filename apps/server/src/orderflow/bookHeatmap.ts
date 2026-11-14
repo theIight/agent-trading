@@ -1,3 +1,4 @@
+import { cleanPrice } from '@wca/shared';
 import type { BookSample } from './localBook.ts';
 
 // Heatmap sổ lệnh: gom mẫu sổ lệnh (đã gom bucket) thành cột thời gian, mỗi ô = khối lượng lệnh chờ trung bình.
@@ -21,7 +22,6 @@ export interface BuildHeatmapOptions {
 }
 
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
-const r2 = (x: number) => Math.round(x * 100) / 100;
 
 /** Mở cột chứa `t`. */
 export const colStart = (t: number, colSec: number) => Math.floor(t / colSec) * colSec;
@@ -47,7 +47,7 @@ export function buildHeatColumns(samples: readonly BookSample[], o: BuildHeatmap
       const avg = r3(q / cur.n);
       if (avg > 0) data.push(ix, avg);
     }
-    out.push({ t: cur.t, shift: r2(basisAt(Math.min(cur.t + colSec, cur.lastT))), data });
+    out.push({ t: cur.t, shift: cleanPrice(basisAt(Math.min(cur.t + colSec, cur.lastT))), data });
   };
   for (const s of samples) {
     const t = colStart(s.t, colSec);

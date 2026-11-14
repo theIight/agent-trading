@@ -5,6 +5,8 @@
 //   → các diff sau phải có pu = u của diff trước.
 // Đứt chuỗi thì snapshot lại.
 
+import { bucketFloor, roundPrice } from '@wca/shared';
+
 export type BookMarket = 'spot' | 'futures';
 
 export type RawLevel = [string, string];
@@ -192,22 +194,24 @@ const roundQty = (x: number) => Math.round(x * 1000) / 1000;
 /**
  * Gom sổ lệnh theo bucket. Lấy cả mức ngoài vùng snapshot: trong sổ cục bộ chúng chỉ có thể đến từ diff
  * (khối lượng tuyệt đối) nên số là đúng; mức ngoài vùng chưa từng nhận diff thì không có trong sổ.
+ * `rangePct` > 0 → chỉ lấy mức trong ±rangePct% quanh mid (giảm dung lượng altcoin: sổ futures 1000 mức phủ ±10–30%).
  */
-export function sampleBook(book: LocalBook, bucket: number, t: number): BookSample | null {
+export function sampleBook(book: LocalBook, bucket: number, t: number, rangePct = 0): BookSample | null {
   const mid = book.mid();
   if (mid === undefined || !(bucket > 0)) return null;
+  const maxDist = rangePct > 0 ? (mid * rangePct) / 100 : Number.POSITIVE_INFINITY;
   const agg = (side: Map<number, number>, within: (p: number) => boolean) => {
     const m = new Map<number, number>();
     for (const [p, q] of side) {
-      if (!within(p)) continue;
-      const key = Math.floor(p / bucket) * bucket;
+      if (!within(p) || Math.abs(p - mid) > maxDist) continue;
+      const key = bucketFloor(p, bucket);
       m.set(key, (m.get(key) ?? 0) + q);
     }
-    return [...m.entries()].map(([p, q]): [number, number] => [roundQty(p), roundQty(q)]).sort((x, y) => x[0] - y[0]);
+    return [...m.entries()].map(([p, q]): [number, number] => [p, roundQty(q)]).sort((x, y) => x[0] - y[0]);
   };
   return {
     t,
-    mid: Math.round(mid * 100) / 100,
+    mid: roundPrice(mid),
     bids: agg(book.bids, p => p <= mid),
     asks: agg(book.asks, p => p >= mid),
     coverLow: book.coverLow,

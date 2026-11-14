@@ -1,4 +1,4 @@
-import { BOOK_HEATMAP_HOURS, BOOK_HEATMAP_MAX_COLS, type BookHeatmap, type WallSegment } from '@wca/shared';
+import { BOOK_HEATMAP_HOURS, BOOK_HEATMAP_MAX_COLS, roundPrice, type BookHeatmap, type WallSegment } from '@wca/shared';
 import { buildHeatColumns, colStart, type HeatColumn } from './bookHeatmap.ts';
 import { basisByMinute, buildSnapshot, findWallSegments, medianBasis, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
 import type { BookSample } from './localBook.ts';
@@ -185,12 +185,14 @@ export class BinanceOrderflow {
       }
     }
     const byMin = basisByMinute(await this.spotCandles(symbol, now), chart);
+    // Làm tròn basis theo độ lớn giá chart (SUI 0,77 cần 6 chữ số, BTC 2).
+    const ref = chart.at(-1)?.close ?? 1e4;
     const lastClosed = Math.floor(now / 60) * 60 - 60;
     // Thị trường nghỉ (vàng cuối tuần): không có cặp nến mới → dùng basis của phút gần nhất còn dữ liệu.
     const lastPair = [...byMin.keys()].reduce((m, t) => (t <= lastClosed && t > m ? t : m), -Infinity);
-    const cur = medianBasis(byMin, lastClosed) ?? (Number.isFinite(lastPair) ? medianBasis(byMin, lastPair) : null);
+    const cur = medianBasis(byMin, lastClosed, 60, ref) ?? (Number.isFinite(lastPair) ? medianBasis(byMin, lastPair, 60, ref) : null);
     const current = cur ?? fallbackValue;
-    return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed)) ?? current, current, fallback: cur === null };
+    return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed), 60, ref) ?? current, current, fallback: cur === null };
   }
 
   /** Lịch sử tường 24h (chưa quy đổi giá). */
@@ -251,7 +253,7 @@ export class BinanceOrderflow {
       // Tường đã kết thúc: basis lúc kết thúc → giá cố định mãi; tường còn tồn tại: basis hiện tại.
       const wallSegments = segs.map(sg => ({
         ...sg,
-        price: Math.round((sg.sourcePrice - (sg.end === null ? base.offset : basis.at(sg.end))) * 100) / 100,
+        price: roundPrice(sg.sourcePrice - (sg.end === null ? base.offset : basis.at(sg.end)), sg.sourcePrice),
       }));
       return { ...base, wallSegments };
     });
@@ -285,7 +287,7 @@ export class BinanceOrderflow {
     if (basis.fallback) snap.notes.push(`Chưa đủ dữ liệu nến chart để tính basis — dùng offset dự phòng ${basis.current}`);
     const st = src.status();
     if (ref.market === 'futures' && st.coverHigh > st.coverLow) {
-      const half = Math.round(((st.coverHigh - st.coverLow) / 2) * 10) / 10;
+      const half = roundPrice((st.coverHigh - st.coverLow) / 2, st.coverHigh);
       snap.notes.push(`Sổ lệnh futures chỉ phủ khoảng ±${half} quanh giá (snapshot 1000 mức); tường xa hơn không thấy được`);
     }
     return snap;
