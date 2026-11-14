@@ -67,14 +67,31 @@
 
 ### 3.3 Order flow (Binance, server tự tính)
 
-* Symbol chart trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT,XAUUSD`) có collector. Nguồn theo `ORDERFLOW_SOURCE_<SYMBOL>=spot|futures:<SYMBOL_BINANCE>` (mặc định `BTCUSDT → spot:BTCUSDT`, `XAUUSD → futures:XAUUSDT` perp, đơn vị oz; thiếu = spot cùng tên). Symbol nguồn **spot** thay hẳn ảnh Bookmap (bị loại khỏi `bookmap.symbols`); symbol nguồn **futures** (vàng: dòng lệnh crypto, ~2% COMEX) vẫn giữ ảnh Bookmap — mỗi phân tích chọn một trong hai. Đặt rỗng để tắt.
+* Symbol chart trong `ORDERFLOW_BINANCE_SYMBOLS` (mặc định `BTCUSDT,XAUUSD,ETHUSDT,SOLUSDT,SUIUSDT,GRAMUSDT,XRPUSDT,BNBUSDT,NEARUSDT,LINKUSDT`) có collector. Nguồn theo `ORDERFLOW_SOURCE_<SYMBOL>=spot|futures:<SYMBOL_BINANCE>` (mặc định `BTCUSDT → spot:BTCUSDT`, `XAUUSD → futures:XAUUSDT` perp, đơn vị oz; 8 top coin → futures cùng tên, đơn vị = coin gốc; thiếu = spot cùng tên). Symbol nguồn **spot** thay hẳn ảnh Bookmap (bị loại khỏi `bookmap.symbols`); symbol nguồn **futures** (vàng: dòng lệnh crypto, ~2% COMEX) vẫn giữ ảnh Bookmap — mỗi phân tích chọn một trong hai. Đặt rỗng để tắt.
 * Collector chạy nền (`apps/server/src/orderflow/collector.ts`), không cần key; DB lưu theo symbol chart:
   * spot: WebSocket `stream.binance.com/stream?streams=<sym>@depth@100ms/<sym>@aggTrade`; snapshot REST `api/v3/depth limit=5000`; bỏ diff `u ≤ lastUpdateId` → diff đầu chứa `lastUpdateId+1` → liền mạch (`U = u trước + 1`);
   * futures: 2 WebSocket — sổ lệnh `fstream.binance.com/public/stream?streams=<sym>@depth@100ms`, lệnh khớp `fstream.binance.com/market/stream?streams=<sym>@aggTrade` (đường `/stream` cũ không gửi aggTrade); snapshot `fapi/v1/depth limit=1000` (chỉ phủ khoảng ±13$ với vàng); bỏ diff `u < lastUpdateId` → diff đầu có `U ≤ lastUpdateId ≤ u` → mỗi diff sau `pu = u trước`;
-  * đứt chuỗi thì snapshot lại; snapshot lại định kỳ `ORDERFLOW_RESYNC_MIN_<SYMBOL>` (vàng 5 phút để vùng phủ theo giá), mặc định `ORDERFLOW_RESYNC_MIN` = 30 phút; mỗi WS rớt thì tự kết nối lại, backoff tới 60s; `GET /api/orderflow/:symbol` có thêm `sourceSymbol, market, coverLow, coverHigh, farLevels, lastResyncReason`.
+  * đứt chuỗi thì snapshot lại; snapshot lại định kỳ `ORDERFLOW_RESYNC_MIN_<SYMBOL>` (vàng và 8 top coin futures 5 phút để vùng phủ theo giá), mặc định `ORDERFLOW_RESYNC_MIN` = 30 phút; mỗi WS rớt thì tự kết nối lại, backoff tới 60s; `GET /api/orderflow/:symbol` có thêm `sourceSymbol, market, coverLow, coverHigh, farLevels, lastResyncReason`.
   * **Chạm mép vùng phủ**: mỗi lần lấy mẫu, mid còn cách `coverLow`/`coverHigh` < `ORDERFLOW_EDGE_RESYNC_PCT` (35) % độ rộng phía đó (đo từ mid lúc snapshot) → snapshot lại (`gần mép vùng phủ`), cách nhau ≥ `ORDERFLOW_EDGE_RESYNC_MIN_SEC` (60s). Snapshot spot 5000 mức chỉ phủ ~1000–1400$ dưới/trên giá BTC.
   * **Mức ngoài vùng phủ**: diff mang khối lượng tuyệt đối nên mức ngoài vùng snapshot đã nhận diff là đúng và được lấy mẫu (mức chưa từng nhận diff không có trong sổ). Snapshot lại khi luồng diff liền mạch (`định kỳ`, `gần mép vùng phủ`) giữ các mức của sổ cũ nằm ngoài vùng phủ mới (trong ±15% quanh giá), áp thêm mọi diff buffer trong lúc chụp; mất chuỗi / WS rớt thì bỏ.
 * Mỗi `ORDERFLOW_SAMPLE_SEC` (10s) gom sổ lệnh theo bucket `ORDERFLOW_BUCKET_<SYMBOL>` (BTC 10, vàng 1): vùng snapshot phủ được + mức ngoài vùng đã nhận diff → bảng `book_samples(symbol, t, data JSON {t, mid, bids, asks, coverLow?, coverHigh?})`. aggTrade gộp theo (giây, bên chủ động), tổng ≥ `ORDERFLOW_BIG_TRADE_<SYMBOL>` (BTC 1, vàng 80 oz) → `big_trades` (giá = VWAP; aggTrade đơn lẻ trên spot hiếm khi > 1 BTC). Giữ `ORDERFLOW_RETAIN_H` (24) giờ. Lịch sử chỉ có từ lúc collector chạy (API công khai không có lịch sử sổ lệnh).
+* **Ngưỡng mặc định theo mã** (`config.ts`, env `ORDERFLOW_<BUCKET|BIG_TRADE|ABSORB|WALL_MIN|OFFSET|RESYNC_MIN>_<SYMBOL>` ghi đè). 8 top coin đo bằng `scripts/orderflow-calibrate.ts <SYMBOL> [phút]` (dữ liệu công khai Binance futures, không ghi DB; 14/11/2026, 60 phút aggTrade): bucket ≈ 0,02% giá làm tròn 1/2/5×10ⁿ và ≥ tick; lệnh lớn ≈ p99,5 tổng lệnh chủ động cùng phía mỗi giây; hấp thụ = 8 × lệnh lớn; tường tối thiểu ≈ p95 khối lượng mỗi bucket trong ±2% quanh giá (sổ 1000 mức).
+
+  | Symbol | Nguồn | Bucket | Lệnh lớn | Hấp thụ | Tường tối thiểu | Offset | Resync |
+  |---|---|---|---|---|---|---|---|
+  | BTCUSDT | spot | 10 | 1 | 8 | 8 | 33 | 30 phút |
+  | XAUUSD | futures XAUUSDT | 1 | 80 oz | 300 oz | 500 oz | 0 | 5 phút |
+  | ETHUSDT | futures | 0.5 | 340 | 2 700 | 2 100 | 0 | 5 phút |
+  | SOLUSDT | futures | 0.02 | 2 300 | 18 000 | 17 000 | 0 | 5 phút |
+  | SUIUSDT | futures | 0.0002 | 49 000 | 390 000 | 230 000 | 0 | 5 phút |
+  | GRAMUSDT | futures | 0.001 | 15 000 | 120 000 | 59 000 | 0 | 5 phút |
+  | XRPUSDT | futures | 0.0002 | 99 000 | 790 000 | 420 000 | 0 | 5 phút |
+  | BNBUSDT | futures | 0.1 | 76 | 610 | 410 | 0 | 5 phút |
+  | NEARUSDT | futures | 0.001 | 14 000 | 110 000 | 51 000 | 0 | 5 phút |
+  | LINKUSDT | futures | 0.002 | 1 800 | 14 000 | 21 000 | 0 | 5 phút |
+
+* **Vùng lấy mẫu**: `ORDERFLOW_SAMPLE_RANGE_PCT` (mặc định 0 = không giới hạn) / `ORDERFLOW_SAMPLE_RANGE_PCT_<SYMBOL>` (ưu tiên hơn; 8 top coin mặc định 3) → `book_samples` chỉ giữ mức trong ±N% quanh mid. Sổ futures 1000 mức của altcoin phủ ±10–30% (~15–23 KB/mẫu ≈ 130–200 MB/24h/mã); giới hạn ±3% đưa về cỡ BTC/ETH. Vùng phủ snapshot (`coverLow/High`, chạm mép) không đổi.
+* **Giá nhỏ** (SUI ~0,77, XRP ~0,98…): giá/basis trong mẫu sổ lệnh, lệnh lớn, snapshot, `wallSegments`, heatmap và tóm tắt `get_orderflow` làm tròn theo độ lớn giá (`roundPrice` trong `packages/shared/src/orderflow.ts`: ~6 chữ số có nghĩa, tối thiểu 2 chữ số thập phân — BTC/vàng giữ 2); cận dưới bucket dùng `bucketFloor` (không lệch do sai số dấu phẩy động). Nhãn khối lượng tường trên chart rút gọn `K`/`M` khi ≥ 10 000.
 * Khi job bắt đầu chạy, server dựng snapshot (`orderflow/calc.ts`) → `data/screenshots/<id>-orderflow.json`:
   * **Tường**: bucket ≥ 3 × median cùng phía trong mẫu mới nhất; `persistMin` = thời gian đứng liên tục (≥ 50% size hiện tại, cho phép hụt 1 mẫu) trong 4 giờ mẫu gần nhất (bỏ đoạn trước khoảng mất dữ liệu > 5 phút); lịch sử ≥ 5 phút thì bỏ tường đứng < 5 phút (spoof). Tối đa 3 mỗi phía.
   * **Volume profile 24h** từ nến 1m spot đã đóng (volume chia đều theo [low, high]), bucket ≈ biên độ/80 làm tròn lên bội số bucket sổ lệnh: POC, vùng giá trị 70%, HVN (đỉnh cục bộ ≥ 1,3 × trung bình, ≤ 2), LVN (đáy cục bộ ≤ 0,5 × trung bình giữa các đỉnh, ≤ 1).

@@ -109,6 +109,7 @@ export async function buildApp(deps: AppDeps = {}) {
               market: cfg.orderflowSources[symbol]?.market ?? 'spot',
               db,
               bucket: cfg.orderflowBuckets[symbol] ?? 10,
+              sampleRangePct: cfg.orderflowSampleRangePctBySymbol[symbol] ?? cfg.orderflowSampleRangePct,
               sampleSec: cfg.orderflowSampleSec,
               retainH: cfg.orderflowRetainH,
               resyncMin: cfg.orderflowResyncMinBySymbol[symbol] ?? cfg.orderflowResyncMin,

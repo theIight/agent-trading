@@ -3,6 +3,7 @@ import {
   bookmapInstrumentLabel,
   bookmapSizeUnit,
   ORDERFLOW_KIND_LABELS,
+  roundPrice,
   SUPPORTED_TFS,
   sortTopDown,
   tfLabel,
@@ -192,7 +193,7 @@ function OrderflowStatusLine({ symbol }: { symbol: string }) {
     <div className={`bm-meta of-status ${live ? 'muted' : 'down'}`}>
       {live ? `Đang ghi sổ lệnh ${venue}` : 'Mất kết nối Binance — đang thử lại'}
       {st.spotPrice != null && <> · giá {fmtPrice(st.spotPrice)}</>}
-      {futures && cover > 0 && <> · sổ lệnh phủ ±{Math.round(cover)}$</>}
+      {futures && cover > 0 && <> · sổ lệnh phủ ±{fmtPrice(roundPrice(cover, st.spotPrice ?? cover))}</>}
       {' · '}lịch sử {st.historyMin} phút
       {st.historyMin < OF_MIN_HISTORY_MIN && <> (cần ≥ {OF_MIN_HISTORY_MIN} phút để tin tường)</>}
       {lag != null && lag > 120 && <> · mẫu cuối {fmtAge(lag)}</>}

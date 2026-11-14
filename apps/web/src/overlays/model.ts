@@ -497,7 +497,9 @@ export function buildOverlayModel(
   return model;
 }
 
-const fmtSize = (n: number) => String(Number(n.toFixed(2)));
+/** Nhãn khối lượng tường: altcoin (SUI, XRP…) tính bằng trăm nghìn coin → rút gọn K/M. */
+export const fmtSize = (n: number) =>
+  n >= 1e6 ? `${Number((n / 1e6).toFixed(2))}M` : n >= 1e4 ? `${Number((n / 1e3).toFixed(1))}K` : String(Number(n.toFixed(2)));
 
 /**
  * Vạch order flow trên chart: chỉ tường lớn (≥ OF_MIN_WALL_RATIO × tường lớn nhất cùng ảnh / sổ lệnh, tối đa
