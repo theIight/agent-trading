@@ -1,3 +1,4 @@
+import { roundPrice } from '@wca/shared';
 import type { Db } from '../db/index.ts';
 import { LocalBook, applyDiffsToLevels, nearCoverEdge, sampleBook, type BookLevels, type BookMarket, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
 import type { BigTrade } from './calc.ts';
@@ -43,6 +44,8 @@ export interface CollectorOptions {
   sourceSymbol?: string;
   market?: BookMarket;
   bucket: number;
+  /** Chỉ lấy mẫu mức trong ±N% quanh mid (0 = không giới hạn). */
+  sampleRangePct?: number;
   sampleSec: number;
   retainH: number;
   /** Snapshot lại định kỳ để làm mới vùng giá phủ được. */
@@ -105,6 +108,8 @@ export class BookCollector {
   private lastEdgeResyncAt = Number.NEGATIVE_INFINITY;
   /** Lệnh chủ động đang gộp theo giây: key `${giây}:${side}`. */
   private pendingTrades = new Map<string, { t: number; side: 'BUY' | 'SELL'; qty: number; notional: number }>();
+  /** Nghe từng giá khớp (alert chạm entry, đường nhanh). */
+  private readonly tradeListeners = new Set<(price: number, timeMs: number) => void>();
   private readonly fetchImpl: typeof fetch;
   private readonly wsFactory: (url: string) => WebSocket;
   private readonly now: () => number;
@@ -120,6 +125,12 @@ export class BookCollector {
 
   get symbol(): string {
     return this.opts.symbol;
+  }
+
+  /** Đăng ký nghe giá khớp (giá nguồn, chưa trừ basis); trả hàm huỷ. */
+  onTrade(listener: (price: number, timeMs: number) => void): () => void {
+    this.tradeListeners.add(listener);
+    return () => this.tradeListeners.delete(listener);
   }
 
   start(): void {
@@ -259,6 +270,13 @@ export class BookCollector {
       const qty = Number(d.q);
       const price = Number(d.p);
       if (!Number.isFinite(qty) || !Number.isFinite(price)) return;
+      for (const l of this.tradeListeners) {
+        try {
+          l(price, Number(d.T));
+        } catch {
+          /* lỗi của listener không được làm hỏng collector */
+        }
+      }
       const t = Math.floor(Number(d.T) / 1000);
       // Sang giây mới → chốt các giây trước.
       for (const g of this.pendingTrades.values()) if (g.t < t) this.flushTrades(t);
@@ -279,7 +297,7 @@ export class BookCollector {
       if (g.qty < this.opts.bigTradeQty) continue;
       this.opts.db
         .prepare('INSERT INTO big_trades (symbol, t, price, qty, side) VALUES (?, ?, ?, ?, ?)')
-        .run(this.opts.symbol, g.t, Math.round((g.notional / g.qty) * 100) / 100, Math.round(g.qty * 1000) / 1000, g.side);
+        .run(this.opts.symbol, g.t, roundPrice(g.notional / g.qty), Math.round(g.qty * 1000) / 1000, g.side);
     }
   }
 
@@ -334,7 +352,7 @@ export class BookCollector {
   takeSample(): BookSample | null {
     this.flushTrades(this.now());
     if (!this.book.isSynced) return null;
-    const s = sampleBook(this.book, this.opts.bucket, this.now());
+    const s = sampleBook(this.book, this.opts.bucket, this.now(), this.opts.sampleRangePct ?? 0);
     if (!s) return null;
     this.opts.db
       .prepare('INSERT OR REPLACE INTO book_samples (symbol, t, data) VALUES (?, ?, ?)')

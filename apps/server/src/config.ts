@@ -19,6 +19,11 @@ function tfList(name: string, fallback: Timeframe[]): Timeframe[] {
   return list.length ? list : fallback;
 }
 
+/** Danh sách id số (Telegram chat / user id, có thể âm), phân cách dấu phẩy. */
+function idList(name: string): string[] {
+  return (process.env[name] ?? '').split(',').map(s => s.trim()).filter(s => /^-?\d{1,20}$/.test(s));
+}
+
 function runnerList(name: string, fallback: RunnerId[]): RunnerId[] {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -38,6 +43,26 @@ function orderflowSources(defaults: Record<string, OrderflowSourceCfg>): Record<
   }
   return out;
 }
+
+/**
+ * Order flow mặc định cho top coin: nguồn Binance USDⓈ-M futures cùng tên (chart cũng là futures → basis ≈ 0),
+ * snapshot lại 5 phút/lần, offset 0. Ngưỡng đo bằng `scripts/orderflow-calibrate.ts` (14/11/2026, 60 phút aggTrade):
+ * bucket ≈ 0,02% giá (1/2/5×10ⁿ, ≥ tick), bigTrade ≈ p99,5 lệnh chủ động cùng phía/giây, absorb = 8 × bigTrade,
+ * wallMin ≈ p95 khối lượng mỗi bucket trong ±2% quanh giá.
+ */
+const ORDERFLOW_COIN_DEFAULTS: Record<string, { bucket: number; bigTrade: number; absorb: number; wallMin: number }> = {
+  ETHUSDT: { bucket: 0.5, bigTrade: 340, absorb: 2700, wallMin: 2100 },
+  SOLUSDT: { bucket: 0.02, bigTrade: 2300, absorb: 18000, wallMin: 17000 },
+  SUIUSDT: { bucket: 0.0002, bigTrade: 49000, absorb: 390000, wallMin: 230000 },
+  GRAMUSDT: { bucket: 0.001, bigTrade: 15000, absorb: 120000, wallMin: 59000 },
+  XRPUSDT: { bucket: 0.0002, bigTrade: 99000, absorb: 790000, wallMin: 420000 },
+  BNBUSDT: { bucket: 0.1, bigTrade: 76, absorb: 610, wallMin: 410 },
+  NEARUSDT: { bucket: 0.001, bigTrade: 14000, absorb: 110000, wallMin: 51000 },
+  LINKUSDT: { bucket: 0.002, bigTrade: 1800, absorb: 14000, wallMin: 21000 },
+};
+const ORDERFLOW_COINS = Object.keys(ORDERFLOW_COIN_DEFAULTS);
+const ofCoin = <T>(pick: (sym: string, v: (typeof ORDERFLOW_COIN_DEFAULTS)[string]) => T): Record<string, T> =>
+  Object.fromEntries(Object.entries(ORDERFLOW_COIN_DEFAULTS).map(([sym, v]) => [sym, pick(sym, v)]));
 
 /** `LIQ_OKX_INST_BTCUSDT=BTC-USDT-SWAP:0.01`; giá trị rỗng = tắt OKX cho symbol. */
 function liqOkxInst(defaults: Record<string, { instId: string; ctVal: number }>): Record<string, { instId: string; ctVal: number } | undefined> {
@@ -125,21 +150,29 @@ export const config = {
   /** Ảnh chụp cũ hơn số phút này so với lúc gửi → cảnh báo. */
   bookmapMaxAgeMin: int('BOOKMAP_MAX_AGE_MIN', 30),
   /** Order flow từ Binance (server tự ghi sổ lệnh qua WebSocket) cho các symbol chart này. Rỗng = tắt. */
-  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? 'BTCUSDT,XAUUSD').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
+  orderflowBinanceSymbols: (process.env.ORDERFLOW_BINANCE_SYMBOLS ?? ['BTCUSDT', 'XAUUSD', ...ORDERFLOW_COINS].join(',')).split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
   /** Nguồn Binance của symbol chart, theo `ORDERFLOW_SOURCE_<SYMBOL>=spot|futures:<SYMBOL_BINANCE>`; thiếu = spot cùng tên. */
-  orderflowSources: orderflowSources({ BTCUSDT: { market: 'spot', symbol: 'BTCUSDT' }, XAUUSD: { market: 'futures', symbol: 'XAUUSDT' } }),
+  orderflowSources: orderflowSources({
+    BTCUSDT: { market: 'spot', symbol: 'BTCUSDT' },
+    XAUUSD: { market: 'futures', symbol: 'XAUUSDT' },
+    ...ofCoin(sym => ({ market: 'futures' as const, symbol: sym })),
+  }),
   /** Bucket giá khi gom sổ lệnh, theo `ORDERFLOW_BUCKET_<SYMBOL>`. */
-  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10, XAUUSD: 1 }),
+  orderflowBuckets: symbolNums('ORDERFLOW_BUCKET_', { BTCUSDT: 10, XAUUSD: 1, ...ofCoin((_, v) => v.bucket) }),
   /** Tổng lệnh chủ động cùng phía trong 1 giây ≥ khối lượng này (base) → lệnh lớn, theo `ORDERFLOW_BIG_TRADE_<SYMBOL>`.
    *  BTC spot: aggTrade đơn lẻ hiếm khi > 1 BTC; gộp theo giây ≥ 1 BTC ≈ vài chục lần/giờ. */
-  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1, XAUUSD: 80 }),
+  orderflowBigTrade: symbolNums('ORDERFLOW_BIG_TRADE_', { BTCUSDT: 1, XAUUSD: 80, ...ofCoin((_, v) => v.bigTrade) }),
   /** Tổng lệnh lớn chủ động tại một bucket (2 giờ) để xét hấp thụ, theo `ORDERFLOW_ABSORB_<SYMBOL>`. */
-  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8, XAUUSD: 300 }),
+  orderflowAbsorb: symbolNums('ORDERFLOW_ABSORB_', { BTCUSDT: 8, XAUUSD: 300, ...ofCoin((_, v) => v.absorb) }),
   /** Khối lượng tối thiểu để một mức tính là tường trong lịch sử tường trên chart, theo `ORDERFLOW_WALL_MIN_<SYMBOL>`. */
-  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8, XAUUSD: 500 }),
+  orderflowWallMin: symbolNums('ORDERFLOW_WALL_MIN_', { BTCUSDT: 8, XAUUSD: 500, ...ofCoin((_, v) => v.wallMin) }),
   /** Offset dự phòng giá nguồn − giá chart khi chưa tính được basis (trung vị 60 phút), theo `ORDERFLOW_OFFSET_<SYMBOL>`. */
-  orderflowOffsets: symbolNums('ORDERFLOW_OFFSET_', { BTCUSDT: 33, XAUUSD: 0 }),
+  orderflowOffsets: symbolNums('ORDERFLOW_OFFSET_', { BTCUSDT: 33, XAUUSD: 0, ...ofCoin(() => 0) }),
   orderflowSampleSec: int('ORDERFLOW_SAMPLE_SEC', 10),
+  /** Chỉ lấy mẫu sổ lệnh trong ±N% quanh giá (0 = không giới hạn), theo `ORDERFLOW_SAMPLE_RANGE_PCT`; theo symbol `ORDERFLOW_SAMPLE_RANGE_PCT_<SYMBOL>`.
+   *  8 top coin mặc định ±3%: sổ futures 1000 mức của altcoin phủ ±10–30% → ~17 KB/mẫu (~150 MB/24h/mã) nếu không giới hạn. */
+  orderflowSampleRangePct: num('ORDERFLOW_SAMPLE_RANGE_PCT', 0),
+  orderflowSampleRangePctBySymbol: symbolNums('ORDERFLOW_SAMPLE_RANGE_PCT_', ofCoin(() => 3)),
   orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
   /** Giá còn cách mép vùng phủ snapshot < N% độ rộng phía đó → snapshot lại sớm (0 = tắt). */
@@ -147,7 +180,7 @@ export const config = {
   /** Khoảng cách tối thiểu giữa 2 lần snapshot do chạm mép (giây). */
   orderflowEdgeResyncMinSec: int('ORDERFLOW_EDGE_RESYNC_MIN_SEC', 60),
   /** Chu kỳ snapshot lại theo symbol (`ORDERFLOW_RESYNC_MIN_<SYMBOL>`): futures chỉ chụp được 1000 mức nên chụp lại thường xuyên để vùng phủ theo giá. */
-  orderflowResyncMinBySymbol: symbolNums('ORDERFLOW_RESYNC_MIN_', { XAUUSD: 5 }),
+  orderflowResyncMinBySymbol: symbolNums('ORDERFLOW_RESYNC_MIN_', { XAUUSD: 5, ...ofCoin(() => 5) }),
   /** Thanh lý (bong bóng thật Binance + OKX, heatmap ước tính từ OI Binance) cho các symbol Binance Futures này. Rỗng = tắt. */
   liqSymbols: (process.env.LIQ_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
   /** `LIQ_OKX_INST_<SYMBOL>=BTC-USDT-SWAP:0.01` (instId:ctVal); rỗng = chỉ Binance. */
@@ -165,6 +198,33 @@ export const config = {
   volAggSymbols: (process.env.VOLAGG_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
   /** Đột biến khi volume nhóm > hệ số này × trung vị 20 nến trước. */
   volAggSpikeX: Number(process.env.VOLAGG_SPIKE_X) > 1 ? Number(process.env.VOLAGG_SPIKE_X) : 3,
+  /** Telegram: gửi ảnh chart khi phân tích kết thúc. Thiếu token hoặc chat id → tắt. */
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
+  telegramChatId: process.env.TELEGRAM_CHAT_ID?.trim() || undefined,
+  /** Topic trong group (forum); rỗng = gửi thẳng vào chat. */
+  telegramThreadId: Number.parseInt(process.env.TELEGRAM_THREAD_ID ?? '', 10) > 0 ? Number.parseInt(process.env.TELEGRAM_THREAD_ID!, 10) : undefined,
+  /** `all` = mỗi khung của phân tích một ảnh; `primary` = chỉ khung chính. */
+  telegramTfs: (process.env.TELEGRAM_TFS === 'primary' ? 'primary' : 'all') as 'all' | 'primary',
+  telegramNotifyFailed: process.env.TELEGRAM_NOTIFY_FAILED !== '0',
+  /** Bot nhận lệnh trong group (long polling). Cần token + chat id; `0` = chỉ gửi một chiều. */
+  telegramBotCommands: process.env.TELEGRAM_BOT_COMMANDS !== '0',
+  /** Chat id thêm được ra lệnh (ngoài TELEGRAM_CHAT_ID). */
+  telegramAllowedChats: idList('TELEGRAM_ALLOWED_CHATS'),
+  /** Giới hạn user id được ra lệnh; rỗng = mọi thành viên chat được phép. */
+  telegramAllowedUsers: idList('TELEGRAM_ALLOWED_USERS'),
+  /** Khung chính / khung phụ khi lệnh `/analyze` không nêu khung. */
+  telegramBotDefaultTf: (isTimeframe(process.env.TELEGRAM_BOT_DEFAULT_TF?.trim().toLowerCase()) ? process.env.TELEGRAM_BOT_DEFAULT_TF!.trim().toLowerCase() : '4h') as Timeframe,
+  telegramBotDefaultContext: tfList('TELEGRAM_BOT_DEFAULT_CONTEXT', ['1d', '1h', '1m']),
+  /** Số phân tích bot tạo đang chờ/chạy tối đa mỗi chat. */
+  telegramBotMaxPending: Math.max(1, int('TELEGRAM_BOT_MAX_PENDING', 2)),
+  /** Web để Chrome headless mở trang `?snapshot=` (pm2: vite preview 5173). */
+  snapshotWebUrl: (process.env.SNAPSHOT_WEB_URL || 'http://127.0.0.1:5173').replace(/\/+$/, ''),
+  /** Channel Playwright: `chrome` = Chrome đã cài; rỗng = Chromium của Playwright. */
+  snapshotChromeChannel: process.env.SNAPSHOT_CHROME_CHANNEL === undefined ? 'chrome' : process.env.SNAPSHOT_CHROME_CHANNEL || undefined,
+  /** Canh giá chạm vùng entry của setup (crypto, phân tích mới nhất mỗi symbol); `0` = tắt. */
+  priceAlerts: process.env.PRICE_ALERTS !== '0',
+  /** Hạn alert khi setup không có `validUntil` (giờ). */
+  priceAlertMaxAgeH: Math.max(1, int('PRICE_ALERT_MAX_AGE_H', 72)),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, PriceAlert, BookHeatmap, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -114,6 +114,12 @@ export interface LiveOrderflow {
 }
 
 /** Order flow hiện tại của symbol (vẽ sẵn trên chart). */
+export function fetchBookHeatmap(symbol: string, tf: Timeframe, after?: number): Promise<BookHeatmap> {
+  const params = new URLSearchParams({ tf });
+  if (after !== undefined) params.set('after', String(after));
+  return request(`/api/orderflow/${encodeURIComponent(symbol)}/heatmap?${params}`);
+}
+
 export function fetchLiveOrderflow(symbol: string): Promise<LiveOrderflow> {
   return request(`/api/orderflow/${encodeURIComponent(symbol)}/levels`);
 }
@@ -124,6 +130,11 @@ export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {
 
 export function fetchAnalysis(id: string): Promise<AnalysisRecord> {
   return request(`/api/analyses/${id}`);
+}
+
+/** Alert chạm entry của từng setup (rỗng khi không canh). */
+export function fetchAlerts(id: string): Promise<PriceAlert[]> {
+  return request(`/api/analyses/${encodeURIComponent(id)}/alerts`);
 }
 
 export function fetchHistory(symbol?: string): Promise<AnalysisRecord[]> {

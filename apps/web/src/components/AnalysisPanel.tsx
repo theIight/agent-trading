@@ -3,6 +3,8 @@ import {
   bookmapInstrumentLabel,
   bookmapSizeUnit,
   ORDERFLOW_KIND_LABELS,
+  PRICE_ALERT_STATUS_LABELS,
+  roundPrice,
   SUPPORTED_TFS,
   sortTopDown,
   tfLabel,
@@ -10,16 +12,18 @@ import {
   type AnalysisResult,
   type BookmapImageRole,
   type Orderflow,
+  type PriceAlert,
   type Timeframe,
   type TradePlan,
   type TradeSetup,
 } from '@wca/shared';
-import { fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
+import { fetchAlerts, fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import {
   bookmapEnabled,
   bookmapOffsetOf,
   bookmapSupported,
+  onAlertEvent,
   useAnalysisStore,
   type StepLog,
 } from '../store/useAnalysisStore.ts';
@@ -192,7 +196,7 @@ function OrderflowStatusLine({ symbol }: { symbol: string }) {
     <div className={`bm-meta of-status ${live ? 'muted' : 'down'}`}>
       {live ? `Đang ghi sổ lệnh ${venue}` : 'Mất kết nối Binance — đang thử lại'}
       {st.spotPrice != null && <> · giá {fmtPrice(st.spotPrice)}</>}
-      {futures && cover > 0 && <> · sổ lệnh phủ ±{Math.round(cover)}$</>}
+      {futures && cover > 0 && <> · sổ lệnh phủ ±{fmtPrice(roundPrice(cover, st.spotPrice ?? cover))}</>}
       {' · '}lịch sử {st.historyMin} phút
       {st.historyMin < OF_MIN_HISTORY_MIN && <> (cần ≥ {OF_MIN_HISTORY_MIN} phút để tin tường)</>}
       {lag != null && lag > 120 && <> · mẫu cuối {fmtAge(lag)}</>}
@@ -390,7 +394,55 @@ function decisionSummary(r: AnalysisResult): string {
   return p.decision === 'STAND_ASIDE' || !main ? DECISION_LABEL[p.decision] : `${DECISION_LABEL[p.decision]} ${main.direction}`;
 }
 
-function TradePlanCard({ plan }: { plan: TradePlan }) {
+/** Alert chạm entry theo setupIndex của phân tích: tải khi mở + cập nhật qua SSE chung. */
+function useSetupAlerts(analysisId: string | undefined): Map<number, PriceAlert> {
+  const [alerts, setAlerts] = useState<Map<number, PriceAlert>>(new Map());
+  useEffect(() => {
+    setAlerts(new Map());
+    if (!analysisId) return;
+    let alive = true;
+    fetchAlerts(analysisId)
+      .then(list => alive && setAlerts(new Map(list.map(a => [a.setupIndex, a]))))
+      .catch(() => {});
+    const off = onAlertEvent(a => {
+      if (a.analysisId === analysisId) setAlerts(prev => new Map(prev).set(a.setupIndex, a));
+    });
+    return () => {
+      alive = false;
+      off();
+    };
+  }, [analysisId]);
+  return alerts;
+}
+
+const fmtClock = (sec: number) => new Date(sec * 1000).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
+
+function AlertLine({ alert }: { alert: PriceAlert }) {
+  if (alert.status === 'ARMED') {
+    return (
+      <div className="alert-line armed" title="Server canh giá (nến 1m đã đóng), báo Telegram một lần khi chạm vùng entry">
+        🔔 Đang canh entry · hết hạn {fmtDateTime(alert.validUntil)}
+      </div>
+    );
+  }
+  if (alert.status === 'TRIGGERED') {
+    return (
+      <div className="alert-line triggered">
+        ✅ Đã chạm entry {fmtClock(alert.statusAt)}
+        {alert.triggerPrice !== undefined && <> · giá {fmtPrice(alert.triggerPrice)}</>}
+        {alert.note && <span className="muted"> · {alert.note}</span>}
+      </div>
+    );
+  }
+  return (
+    <div className="alert-line canceled">
+      ✖ Huỷ alert — {alert.note ?? PRICE_ALERT_STATUS_LABELS[alert.status]} <span className="muted">({fmtClock(alert.statusAt)})</span>
+    </div>
+  );
+}
+
+function TradePlanCard({ plan, analysisId }: { plan: TradePlan; analysisId?: string }) {
+  const alerts = useSetupAlerts(analysisId);
   const { selectedSetup, selectSetup, showReferenceSetups, setShowReferenceSetups } = useAnalysisStore();
   const main = plan.setups[0];
   const tone = plan.decision === 'STAND_ASIDE' ? 'aside' : plan.decision === 'WAIT_FOR_SETUP' ? 'wait' : main?.direction.toLowerCase();
@@ -445,6 +497,7 @@ function TradePlanCard({ plan }: { plan: TradePlan }) {
             {st.scenario && <> · kịch bản {st.scenario}</>}
           </div>
           {st.rationale && <div className="note">{st.rationale}</div>}
+          {alerts.get(i) && <AlertLine alert={alerts.get(i)!} />}
           {st.refinedEntry && <RefinedEntryBlock setup={st} />}
         </button>
       ))}
@@ -591,7 +644,7 @@ function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | nul
       </ol>
 
       <div className="section-title">Setup</div>
-      {a.tradePlan ? <TradePlanCard plan={a.tradePlan} /> : <LegacyAction a={a} />}
+      {a.tradePlan ? <TradePlanCard plan={a.tradePlan} analysisId={record?.id ?? a.id} /> : <LegacyAction a={a} />}
 
       {a.orderflow && (
         <>

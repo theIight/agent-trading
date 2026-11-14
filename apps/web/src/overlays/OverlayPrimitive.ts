@@ -12,8 +12,9 @@ import type {
   Time,
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import { EMPTY_MODEL, layoutLabels, type LabelBox, type OverlayModel } from './model.ts';
+import { EMPTY_MODEL, layoutLabels, overlayPriceRange, type LabelBox, type OverlayModel } from './model.ts';
 import { display, font } from '../chart/displaySettings.ts';
+import { wallStyle } from './orderflowStyle.ts';
 
 type TimeMapper = (time: number) => number | null;
 
@@ -23,6 +24,14 @@ interface Ctx {
   model: OverlayModel;
   mapTime: TimeMapper;
   textColor: string;
+}
+
+/** Chữ sáng → nền tối. Không đọc được màu → coi như nền tối. */
+function isLightText(color: string): boolean {
+  const hex = /^#([0-9a-f]{6})$/i.exec(color);
+  if (!hex) return true;
+  const n = parseInt(hex[1]!, 16);
+  return 0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255) > 128;
 }
 
 function xOf(ctx: Ctx, time: number): number | null {
@@ -82,7 +91,10 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
       c.textBaseline = 'middle';
       const ofLabels: { y: number; text: string; color: string }[] = [];
       const endLabels: { x: number; y: number; text: string; color: string }[] = [];
-      for (const of of this.ctx.model.orderflowLines) {
+      const light = isLightText(this.ctx.textColor) === false;
+      for (const item of this.ctx.model.orderflowLines) {
+        const st = wallStyle(item, display(), light);
+        const of = { ...item, color: st.fill, textColor: st.text, width: st.width, label: st.label };
         const y = yOf(this.ctx, of.price);
         if (y === null) continue;
         // Đoạn theo thời gian: đầu đoạn trước dữ liệu → mép trái; t2 null → mép phải.
@@ -136,7 +148,13 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
         const cur = endLabels[i]!;
         if (Math.abs(cur.x - prev.x) < 40) cur.y = Math.max(cur.y, prev.y + ofLabelGap());
       }
+      // Viền tối/sáng quanh nhãn order flow để đọc được khi nằm đè lên dải cùng màu.
+      const halo = light ? 'rgba(255,255,255,0.85)' : 'rgba(10,12,18,0.85)';
+      c.lineJoin = 'round';
+      c.lineWidth = 3;
+      c.strokeStyle = halo;
       for (const l of endLabels) {
+        c.strokeText(l.text, l.x, l.y);
         c.fillStyle = l.color;
         c.fillText(l.text, l.x, l.y);
       }
@@ -144,7 +162,9 @@ class BackgroundRenderer implements IPrimitivePaneRenderer {
       // Vạch sát nhau → giãn nhãn dọc để không đè (nhãn dưới cùng giữ giữa vạch).
       ofLabels.sort((p, q) => q.y - p.y);
       for (let i = 1; i < ofLabels.length; i++) ofLabels[i]!.y = Math.min(ofLabels[i]!.y, ofLabels[i - 1]!.y - ofLabelGap());
+      c.strokeStyle = halo;
       for (const l of ofLabels) {
+        c.strokeText(l.text, mediaSize.width - 4, l.y);
         c.fillStyle = l.color;
         c.fillText(l.text, mediaSize.width - 4, l.y);
       }
@@ -275,27 +295,7 @@ export class OverlayPrimitive implements ISeriesPrimitive<Time> {
 
   /** Mở rộng thang giá để thấy TP/SL và đường dự đoán nằm trong vùng đang xem. */
   autoscaleInfo(start: Logical, end: Logical): AutoscaleInfo | null {
-    let min = Infinity;
-    let max = -Infinity;
-    const inView = (t: number) => {
-      const l = this.mapTime(t);
-      return l !== null && l >= start - 1 && l <= end + 1;
-    };
-    for (const r of this.model.rects) {
-      if (r.noAutoscale) continue; // trading range không ép thang giá
-      if (inView(r.t1) || inView(r.t2)) {
-        min = Math.min(min, r.bottom);
-        max = Math.max(max, r.top);
-      }
-    }
-    for (const line of this.model.lines) {
-      for (const p of line.points) {
-        if (inView(p.time)) {
-          min = Math.min(min, p.price);
-          max = Math.max(max, p.price);
-        }
-      }
-    }
-    return Number.isFinite(min) ? { priceRange: { minValue: min, maxValue: max } } : null;
+    const r = overlayPriceRange(this.model, this.mapTime, start, end);
+    return r ? { priceRange: { minValue: r.min, maxValue: r.max } } : null;
   }
 }

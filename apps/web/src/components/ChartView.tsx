@@ -4,9 +4,11 @@ import { ChartController, type LegendData } from '../chart/ChartController.ts';
 import { OverlayManager } from '../overlays/OverlayManager.ts';
 import { buildDemoAnalysis, type DemoVariant } from '../overlays/demoAnalysis.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
+import { useRecentSymbolsStore } from '../store/useRecentSymbolsStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 import { useOrderflowStore } from '../store/useOrderflowStore.ts';
 import { useLiquidationStore } from '../store/useLiquidationStore.ts';
+import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
@@ -39,9 +41,11 @@ const DEMO_VARIANT: DemoVariant = DEMO_PARAM === 'enter' || DEMO_PARAM === 'asid
 interface Props {
   onStatus: (s: string) => void;
   onReady?: (controller: ChartController | null) => void;
+  /** Chế độ ảnh chụp: bố cục cố định (nến 60% trái, setup 50% phải). */
+  snapshot?: boolean;
 }
 
-export function ChartView({ onStatus, onReady }: Props) {
+export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<ChartController | null>(null);
   const overlayRef = useRef<OverlayManager | null>(null);
@@ -52,6 +56,7 @@ export function ChartView({ onStatus, onReady }: Props) {
   const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols, liquidationSymbols } = useAnalysisStore();
   const { data: liq, error: liqError, showBubbles, showHeatmap, watch: watchLiquidation } = useLiquidationStore();
   const liqSymbol = liquidationSymbols.includes(symbol) ? symbol : null;
+  const { data: bookHeat, error: bookHeatError, show: showBookHeat, watch: watchBookHeat } = useBookHeatmapStore();
   const volumeAggSymbols = useAnalysisStore(s => s.volumeAggSymbols);
   const { source: volSource, data: volAgg, error: volAggError, sync: syncVolAgg } = useVolumeAggStore();
   const volAggSymbol = volumeAggSymbols.includes(symbol) ? symbol : null;
@@ -71,6 +76,7 @@ export function ChartView({ onStatus, onReady }: Props) {
       onStatus,
       onError: setError,
       onInstrument: setInstrument,
+      onLoaded: sym => useRecentSymbolsStore.getState().add(sym),
       onDataChange: candles => {
         setBars(prev =>
           prev.count === candles.length && prev.lastTime === (candles.at(-1)?.time ?? null)
@@ -89,7 +95,7 @@ export function ChartView({ onStatus, onReady }: Props) {
       },
     });
     controllerRef.current = ctrl;
-    overlayRef.current = new OverlayManager(ctrl);
+    overlayRef.current = new OverlayManager(ctrl, { snapshot });
     onReady?.(ctrl);
     return () => {
       onReady?.(null);
@@ -153,6 +159,17 @@ export function ChartView({ onStatus, onReady }: Props) {
     overlayRef.current?.setLiquidation(liq ? { data: liq, showBubbles, showHeatmap } : null);
   }, [liq, showBubbles, showHeatmap]);
 
+  // Heatmap sổ lệnh: theo symbol có order flow + khung đang xem (chỉ poll khi bật).
+  useEffect(() => {
+    watchBookHeat(liveOfSymbol, tf);
+  }, [liveOfSymbol, tf, watchBookHeat]);
+
+  useEffect(() => () => watchBookHeat(null, '1m'), [watchBookHeat]);
+
+  useEffect(() => {
+    overlayRef.current?.setBookHeatmap(bookHeat ? { data: bookHeat, show: showBookHeat } : null);
+  }, [bookHeat, showBookHeat]);
+
   useEffect(() => {
     overlayRef.current?.setSetupView({ selectedSetup, showReferenceSetups });
   }, [selectedSetup, showReferenceSetups]);
@@ -201,6 +218,9 @@ export function ChartView({ onStatus, onReady }: Props) {
               ? 'mất kết nối Binance — đang giữ vạch cũ'
               : `lịch sử ${Math.round(liveOf!.historyMin)} phút (cần ≥ 30 phút để tin tường)`}
         </div>
+      )}
+      {liveOfSymbol && showBookHeat && bookHeatError && (
+        <div className="of-chart-status bookheat-chart-status down">Heatmap sổ lệnh: lỗi tải ({bookHeatError})</div>
       )}
       {liqSymbol && (showBubbles || showHeatmap) && (liqError || (liq && liq.notes.length > 0)) && (
         <div className={`of-chart-status liq-chart-status ${liqError ? 'down' : 'muted'}`}>

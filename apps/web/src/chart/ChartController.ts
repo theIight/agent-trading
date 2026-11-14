@@ -46,6 +46,8 @@ export interface ChartListeners {
   onError?: (message: string | null) => void;
   /** Gọi sau mỗi lần dữ liệu thay đổi (để overlay vẽ lại). */
   onDataChange?: (candles: readonly Candle[]) => void;
+  /** Gọi khi tải nến của symbol thành công (lưu "xem gần đây"). */
+  onLoaded?: (symbol: string) => void;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -231,6 +233,7 @@ export class ChartController {
       this.fixedPrecision = info && info.assetClass !== 'crypto' ? 2 : null;
       this.candles = res.candles;
       this.setAllData();
+      this.listeners.onLoaded?.(symbol);
       // Đổi symbol: bật lại auto-scale trục giá (người dùng kéo trục giá sẽ tắt nó),
       // nếu không màn hình vẫn đứng ở vùng giá của symbol cũ (vd 70k khi mở NEAR ~3.5).
       if (symbolChanged) this.resetPriceScale();
@@ -265,6 +268,8 @@ export class ChartController {
   }
 
   destroy(): void {
+    // Huỷ khi đang tải (StrictMode dev mount 2 lần, đổi trang nhanh): bỏ kết quả tải dở, không chạm chart đã remove.
+    this.loadToken++;
     this.unsubscribeLive?.();
     this.chart.remove();
   }

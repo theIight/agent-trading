@@ -68,6 +68,39 @@ const MIGRATIONS: string[] = [
      volume REAL NOT NULL,
      PRIMARY KEY (symbol, venue, tf, t)
    ) WITHOUT ROWID;`,
+  // Alert chạm vùng entry của setup (crypto). Thời gian: unix giây.
+  `CREATE TABLE IF NOT EXISTS price_alerts (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     analysis_id TEXT NOT NULL,
+     symbol TEXT NOT NULL,
+     setup_index INTEGER NOT NULL,
+     direction TEXT NOT NULL,
+     entry_type TEXT NOT NULL,
+     tf TEXT NOT NULL,
+     entry_low REAL NOT NULL,
+     entry_high REAL NOT NULL,
+     stop_loss REAL NOT NULL,
+     take_profits TEXT NOT NULL,
+     risk_reward REAL,
+     valid_until INTEGER NOT NULL,
+     armed_at INTEGER NOT NULL,
+     checked_until INTEGER,
+     status TEXT NOT NULL,
+     status_at INTEGER NOT NULL,
+     trigger_price REAL,
+     note TEXT
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_price_alerts_status ON price_alerts(status, symbol);`,
+  `CREATE INDEX IF NOT EXISTS idx_price_alerts_analysis ON price_alerts(analysis_id);`,
+  // Tin Telegram đã gửi cho phân tích (album kết quả) để alert trả lời vào. thread_id: NULL = topic mặc định, 0 = không topic.
+  `CREATE TABLE IF NOT EXISTS telegram_messages (
+     analysis_id TEXT NOT NULL,
+     chat_id TEXT NOT NULL,
+     thread_id INTEGER,
+     message_id INTEGER NOT NULL,
+     sent_at INTEGER NOT NULL
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_telegram_messages ON telegram_messages(analysis_id, sent_at);`,
 ];
 
 export function openDb(dbPath: string): Db {
@@ -79,6 +112,7 @@ export function openDb(dbPath: string): Db {
   addColumnIfMissing(db, 'analyses', 'model', 'TEXT');
   addColumnIfMissing(db, 'analyses', 'bookmap', 'INTEGER');
   addColumnIfMissing(db, 'analyses', 'orderflow_source', 'TEXT');
+  addColumnIfMissing(db, 'price_alerts', 'arm_price', 'REAL');
   return db;
 }
 

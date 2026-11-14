@@ -283,6 +283,15 @@ export class AnalysisService {
     };
   }
 
+  /** Heatmap sổ lệnh cho chart: cột = độ dài nến `tf`; `after` = chỉ trả cột sau mốc này. */
+  async orderflowHeatmap(symbol: string, tf: string, after?: number) {
+    const sym = normalizeSymbol(symbol);
+    const of = this.opts.binanceOrderflow;
+    if (!of?.has(sym)) throw new ServiceError(`Chưa bật order flow Binance cho ${symbol}`, 404);
+    if (!isTimeframe(tf)) throw new ServiceError(`Khung không hợp lệ: ${tf}`);
+    return of.bookHeatmap(sym, tfSeconds(tf), after);
+  }
+
   /** Thanh lý cho chart (bong bóng theo nến `tf` + heatmap ước tính). */
   async liquidationLive(symbol: string, tf: string, heatmapAsOf?: number) {
     const sym = normalizeSymbol(symbol);
@@ -467,6 +476,11 @@ export class AnalysisService {
       return true;
     }
     return false;
+  }
+
+  /** Phân tích đang chạy + id đang chờ theo thứ tự hàng đợi. */
+  queueSnapshot(): { running: string | null; queued: string[] } {
+    return { running: this.current?.id ?? null, queued: this.queue.map(j => j.id) };
   }
 
   isBusy(): boolean {

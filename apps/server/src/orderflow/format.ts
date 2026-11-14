@@ -1,4 +1,4 @@
-import { ORDERFLOW_KIND_LABELS } from '@wca/shared';
+import { ORDERFLOW_KIND_LABELS, roundPrice } from '@wca/shared';
 import { cvdText, type BinanceOrderflowSnapshot } from './calc.ts';
 
 // Bản tóm tắt order flow Binance cho agent (MCP get_orderflow): gọn, không có dữ liệu thô.
@@ -6,12 +6,12 @@ import { cvdText, type BinanceOrderflowSnapshot } from './calc.ts';
 const iso = (t: number) => new Date(t * 1000).toISOString().replace('.000Z', 'Z');
 
 export function formatOrderflowForAgent(s: BinanceOrderflowSnapshot): string {
-  const toApp = (p: number) => Math.round((p - s.offset) * 100) / 100;
+  const toApp = (p: number) => roundPrice(p - s.offset, p);
   const lines: string[] = [
     `Order flow ${s.symbol} — ${s.venue}, lấy lúc ${iso(s.asOf)}. Lịch sử sổ lệnh dùng để tính: ${Math.round(s.historyMin)} phút.`,
     `MỌI giá dưới đây ĐÃ quy đổi về giá chart = giá ${s.venue} − basis ${s.offset} (trung vị 60 phút giá nguồn − giá chart). Lúc lấy: giá nguồn ${s.spotPrice}, giá chart ${s.appPrice ?? 'không rõ'}` +
-      (s.appPrice != null ? ` (chênh lệch thực tế ${Math.round((s.spotPrice - s.appPrice) * 100) / 100})` : '') +
-      '. Sai số quy đổi vài $; entry/SL/TP vẫn lấy từ get_klines.',
+      (s.appPrice != null ? ` (chênh lệch thực tế ${roundPrice(s.spotPrice - s.appPrice, s.spotPrice)})` : '') +
+      '. Sai số quy đổi cỡ vài bucket giá; entry/SL/TP vẫn lấy từ get_klines.',
     ...s.notes.map(n => `Lưu ý: ${n}`),
     '',
     'Mức (server tính, sẽ tự vẽ lên chart; KHÔNG chép vào orderflow.levels):',

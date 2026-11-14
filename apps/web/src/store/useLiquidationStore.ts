@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { LiveLiquidations, Timeframe } from '@wca/shared';
 import { fetchLiquidations } from '../api/client.ts';
+import { useBookHeatmapStore } from './useBookHeatmapStore.ts';
 
 // Thanh lý của symbol/khung đang xem: bong bóng thanh lý thật + heatmap ước tính. Toggle nhớ trong localStorage.
 
@@ -35,6 +36,7 @@ interface LiquidationState {
   watch: (symbol: string | null, tf: Timeframe) => void;
   toggleBubbles: () => void;
   toggleHeatmap: () => void;
+  setHeatmap: (show: boolean) => void;
 }
 
 let timer: ReturnType<typeof setInterval> | null = null;
@@ -70,9 +72,12 @@ export const useLiquidationStore = create<LiquidationState>((set, get) => ({
     set({ showBubbles });
     save(BUBBLES_KEY, showBubbles);
   },
-  toggleHeatmap: () => {
-    const showHeatmap = !get().showHeatmap;
+  toggleHeatmap: () => get().setHeatmap(!get().showHeatmap),
+  setHeatmap: showHeatmap => {
+    if (showHeatmap === get().showHeatmap) return;
     set({ showHeatmap });
     save(HEATMAP_KEY, showHeatmap);
+    // Hai heatmap không chồng lên nhau.
+    if (showHeatmap) useBookHeatmapStore.getState().setShow(false);
   },
 }));

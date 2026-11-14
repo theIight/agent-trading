@@ -17,7 +17,7 @@ import { display } from '../chart/displaySettings.ts';
 
 // Lớp thanh lý: heatmap mức thanh lý ước tính (sau nến) + bong bóng thanh lý thật (trên nến).
 
-type TimeMapper = (time: number) => number | null;
+export type TimeMapper = (time: number) => number | null;
 
 interface LiqData {
   heatmap: LiquidationHeatmap | null;
@@ -47,9 +47,14 @@ function palette(opacity: number): string[] {
 }
 
 function xOf(ctx: Ctx, time: number): number | null {
-  const logical = ctx.data.mapTime(time);
+  return timeToX(ctx.chart, ctx.data.mapTime, time);
+}
+
+/** Toạ độ x của thời điểm bất kỳ (nội suy giữa hai nến); ngoài vùng nến → null. */
+export function timeToX(chart: IChartApi, mapTime: TimeMapper, time: number): number | null {
+  const logical = mapTime(time);
   if (logical === null) return null;
-  const ts = ctx.chart.timeScale();
+  const ts = chart.timeScale();
   const lo = Math.floor(logical);
   const xLo = ts.logicalToCoordinate(lo as Logical);
   if (xLo === null || logical === lo) return xLo;

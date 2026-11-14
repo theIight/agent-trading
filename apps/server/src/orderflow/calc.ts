@@ -1,4 +1,4 @@
-import type { OrderflowLevel, WallSegment } from '@wca/shared';
+import { bucketFloor, cleanPrice, roundPrice, type OrderflowLevel, type WallSegment } from '@wca/shared';
 import type { BookSample } from './localBook.ts';
 
 // Tính order flow từ dữ liệu Binance (thuần, không I/O): tường thanh khoản bền, volume profile, CVD, hấp thụ.
@@ -111,7 +111,7 @@ export interface VolumeProfile {
 /** Bucket profile: khoảng ~`target` bucket trên biên độ giá, làm tròn lên bội số bucket sổ lệnh. */
 export function profileBucket(range: number, bookBucket: number, target = 80): number {
   if (!(range > 0) || !(bookBucket > 0)) return bookBucket;
-  return Math.max(1, Math.ceil(range / target / bookBucket)) * bookBucket;
+  return cleanPrice(Math.max(1, Math.ceil(range / target / bookBucket)) * bookBucket);
 }
 
 /** Volume profile từ nến 1m: volume mỗi nến chia đều cho các bucket trong [low, high]. */
@@ -119,8 +119,8 @@ export function volumeProfile(candles: readonly SpotCandle[], bucket: number): V
   if (!candles.length || !(bucket > 0)) return null;
   const vol = new Map<number, number>();
   for (const c of candles) {
-    const lo = Math.floor(c.low / bucket);
-    const hi = Math.floor(c.high / bucket);
+    const lo = Math.floor(c.low / bucket + 1e-9);
+    const hi = Math.floor(c.high / bucket + 1e-9);
     const n = hi - lo + 1;
     for (let i = lo; i <= hi; i++) vol.set(i, (vol.get(i) ?? 0) + c.volume / n);
   }
@@ -128,7 +128,7 @@ export function volumeProfile(candles: readonly SpotCandle[], bucket: number): V
   const first = keys[0]!;
   const arr: number[] = [];
   for (let i = first; i <= keys.at(-1)!; i++) arr.push(vol.get(i) ?? 0);
-  const node = (idx: number): ProfileNode => ({ price: r2((first + idx + 0.5) * bucket), volume: r3(arr[idx]!) });
+  const node = (idx: number): ProfileNode => ({ price: roundPrice((first + idx + 0.5) * bucket), volume: r3(arr[idx]!) });
   const total = arr.reduce((a, b) => a + b, 0);
   const mean = total / arr.length;
   let pocIdx = 0;
@@ -170,7 +170,7 @@ export function volumeProfile(candles: readonly SpotCandle[], bucket: number): V
     poc: node(pocIdx),
     hvn: hvn.map(node),
     lvn: lvn.map(node),
-    valueArea: { low: r2((first + lo) * bucket), high: r2((first + hi + 1) * bucket) },
+    valueArea: { low: roundPrice((first + lo) * bucket), high: roundPrice((first + hi + 1) * bucket) },
   };
 }
 
@@ -192,7 +192,7 @@ export function cvdStats(candles: readonly SpotCandle[]): CvdStats | null {
   if (!candles.length) return null;
   const sumDelta = (cs: readonly SpotCandle[]) => r3(cs.reduce((a, c) => a + delta(c), 0));
   const last = (n: number) => candles.slice(-n);
-  const change = (cs: readonly SpotCandle[]) => (cs.length ? r2(cs.at(-1)!.close - cs[0]!.open) : 0);
+  const change = (cs: readonly SpotCandle[]) => (cs.length ? roundPrice(cs.at(-1)!.close - cs[0]!.open, cs[0]!.open) : 0);
   const w4 = last(240);
   // CVD cộng dồn trong 4h để so đỉnh/đáy với giá.
   let cum = 0;
@@ -255,7 +255,7 @@ export function findAbsorption(trades: readonly BigTrade[], candles: readonly Sp
   const groups = new Map<string, Absorption>();
   for (const tr of trades) {
     if (tr.t < from || tr.t > now) continue;
-    const price = Math.floor(tr.price / bucket) * bucket;
+    const price = bucketFloor(tr.price, bucket);
     const key = `${tr.side}:${price}`;
     const g = groups.get(key) ?? { price, aggressor: tr.side, qty: 0, trades: 0, lastAt: 0 };
     g.qty = r3(g.qty + tr.qty);
@@ -327,7 +327,7 @@ export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
   const spotPrice = latest?.mid ?? inp.candles.at(-1)?.close ?? 0;
   // Quy đổi spot → chart bằng basis ổn định (không đo theo từng lần: đo lệch pha làm vạch nhảy).
   const offset = inp.offset ?? 0;
-  const toApp = (p: number) => r2(p - offset);
+  const toApp = (p: number) => roundPrice(p - offset, p);
   const historyMin = latest ? r2((latest.t - inp.samples[0]!.t) / 60) : 0;
   const notes: string[] = [];
   if (!latest) notes.push('Chưa có dữ liệu sổ lệnh (collector chưa chạy hoặc mất kết nối) — không có tường thanh khoản');
@@ -353,7 +353,7 @@ export function buildSnapshot(inp: SnapshotInput): BinanceOrderflowSnapshot {
       sizeSource: 'BOOK',
       persistMin: w.persistMin,
       strength: r2(0.3 + 0.7 * (maxWall ? w.size / maxWall : 0)),
-      note: `${w.side === 'BID' ? 'Lệnh chờ mua' : 'Lệnh chờ bán'} ${fmt(w.size)} (giá nguồn ${w.price}–${w.price + inp.bucket}), đứng ${Math.round(w.persistMin)} phút` +
+      note: `${w.side === 'BID' ? 'Lệnh chờ mua' : 'Lệnh chờ bán'} ${fmt(w.size)} (giá nguồn ${w.price}–${cleanPrice(w.price + inp.bucket)}), đứng ${Math.round(w.persistMin)} phút` +
         (w.maxSize > w.size * 1.3 ? `, đã giảm từ ${fmt(w.maxSize)}` : ''),
     });
   }
@@ -532,9 +532,9 @@ export function basisByMinute(spot: readonly { time: number; close: number }[], 
 /** Số cặp phút tối thiểu để tin trung vị basis. */
 export const BASIS_MIN_SAMPLES = 10;
 
-/** Trung vị basis của `windowMin` nến 1m mở trong (at − windowMin·60, at]; thiếu dữ liệu → null. */
-export function medianBasis(byMinute: ReadonlyMap<number, number>, at: number, windowMin = 60): number | null {
+/** Trung vị basis của `windowMin` nến 1m mở trong (at − windowMin·60, at]; thiếu dữ liệu → null. Làm tròn theo độ lớn giá `ref` (mặc định cỡ BTC → 2 chữ số). */
+export function medianBasis(byMinute: ReadonlyMap<number, number>, at: number, windowMin = 60, ref = 1e4): number | null {
   const xs: number[] = [];
   for (const [t, d] of byMinute) if (t <= at && t > at - windowMin * 60) xs.push(d);
-  return xs.length >= BASIS_MIN_SAMPLES ? r2(median(xs)) : null;
+  return xs.length >= BASIS_MIN_SAMPLES ? roundPrice(median(xs), ref) : null;
 }

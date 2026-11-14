@@ -1,4 +1,5 @@
-import type { WallSegment } from '@wca/shared';
+import { BOOK_HEATMAP_HOURS, BOOK_HEATMAP_MAX_COLS, roundPrice, type BookHeatmap, type WallSegment } from '@wca/shared';
+import { buildHeatColumns, colStart, type HeatColumn } from './bookHeatmap.ts';
 import { basisByMinute, buildSnapshot, findWallSegments, medianBasis, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
 import type { BookSample } from './localBook.ts';
 import type { BookMarket } from './localBook.ts';
@@ -90,6 +91,8 @@ export class BinanceOrderflow {
   private readonly sampleCache = new Map<string, BookSample[]>();
   /** Nến chart đã đóng theo symbol, cache theo phút đóng gần nhất. */
   private readonly chartCache = new Map<string, { minute: number; candles: readonly { time: number; close: number }[] }>();
+  /** Cột heatmap sổ lệnh đã đóng (và đã qua 1 phút để basis ổn định) theo `symbol:colSec`. */
+  private readonly heatCache = new Map<string, HeatColumn[]>();
   /** Số request klines đã gọi (để test cache). */
   klineRequests = 0;
 
@@ -182,12 +185,14 @@ export class BinanceOrderflow {
       }
     }
     const byMin = basisByMinute(await this.spotCandles(symbol, now), chart);
+    // Làm tròn basis theo độ lớn giá chart (SUI 0,77 cần 6 chữ số, BTC 2).
+    const ref = chart.at(-1)?.close ?? 1e4;
     const lastClosed = Math.floor(now / 60) * 60 - 60;
     // Thị trường nghỉ (vàng cuối tuần): không có cặp nến mới → dùng basis của phút gần nhất còn dữ liệu.
     const lastPair = [...byMin.keys()].reduce((m, t) => (t <= lastClosed && t > m ? t : m), -Infinity);
-    const cur = medianBasis(byMin, lastClosed) ?? (Number.isFinite(lastPair) ? medianBasis(byMin, lastPair) : null);
+    const cur = medianBasis(byMin, lastClosed, 60, ref) ?? (Number.isFinite(lastPair) ? medianBasis(byMin, lastPair, 60, ref) : null);
     const current = cur ?? fallbackValue;
-    return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed)) ?? current, current, fallback: cur === null };
+    return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed), 60, ref) ?? current, current, fallback: cur === null };
   }
 
   /** Lịch sử tường 24h (chưa quy đổi giá). */
@@ -197,6 +202,43 @@ export class BinanceOrderflow {
       bucket: this.opts.buckets[symbol] ?? 10,
       minSize: this.opts.wallMin?.[symbol] ?? 0,
     });
+  }
+
+  /**
+   * Heatmap sổ lệnh 24h theo cột `colSec` (≥ 60). `after` = mở cột ĐÃ ĐÓNG cuối cùng client có → chỉ trả cột sau đó.
+   * Cột đã đóng (cộng 1 phút cho basis ổn định) được cache, mỗi lần chỉ tính cột mới + cột đang chạy.
+   */
+  async bookHeatmap(symbol: string, colSecIn: number, after?: number): Promise<BookHeatmap> {
+    const src = this.opts.collectors[symbol];
+    if (!src) throw new Error(`Chưa bật order flow Binance cho ${symbol}`);
+    const now = this.now();
+    const colSec = Math.max(60, Math.floor(colSecIn));
+    const bucket = this.opts.buckets[symbol] ?? 10;
+    const from = colStart(Math.max(now - BOOK_HEATMAP_HOURS * 3600, now - (BOOK_HEATMAP_MAX_COLS - 1) * colSec), colSec);
+    const basis = await this.basisFn(symbol, now);
+    const key = `${symbol}:${colSec}`;
+    const cached = (this.heatCache.get(key) ?? []).filter(c => c.t >= from);
+    const freshFrom = cached.length ? cached.at(-1)!.t + colSec : from;
+    const samples = this.historySamples(symbol, now, BOOK_HEATMAP_HOURS).filter(s => s.t >= freshFrom && s.t <= now);
+    const fresh = buildHeatColumns(samples, { colSec, bucket, basisAt: t => basis.at(t) });
+    const stable = (c: HeatColumn) => c.t + colSec + 60 <= now;
+    const closedFresh = fresh.filter(stable);
+    const cols = [...cached, ...closedFresh];
+    this.heatCache.set(key, cols);
+    const all = [...cols, ...fresh.filter(c => !stable(c))];
+    const out = after !== undefined && Number.isFinite(after) ? all.filter(c => c.t > after) : all;
+    const last = out.at(-1);
+    return {
+      symbol,
+      colSec,
+      bucket,
+      cols: out.map(c => c.t),
+      shift: out.map(c => c.shift),
+      data: out.map(c => c.data),
+      unit: sizeUnit(this.source(symbol).symbol),
+      partialLast: Boolean(last && last.t + colSec > now),
+      asOf: now,
+    };
   }
 
   /** Order flow hiện tại cho chart (dùng lại bản tính trong LIVE_CACHE_SEC giây). */
@@ -211,7 +253,7 @@ export class BinanceOrderflow {
       // Tường đã kết thúc: basis lúc kết thúc → giá cố định mãi; tường còn tồn tại: basis hiện tại.
       const wallSegments = segs.map(sg => ({
         ...sg,
-        price: Math.round((sg.sourcePrice - (sg.end === null ? base.offset : basis.at(sg.end))) * 100) / 100,
+        price: roundPrice(sg.sourcePrice - (sg.end === null ? base.offset : basis.at(sg.end)), sg.sourcePrice),
       }));
       return { ...base, wallSegments };
     });
@@ -245,7 +287,7 @@ export class BinanceOrderflow {
     if (basis.fallback) snap.notes.push(`Chưa đủ dữ liệu nến chart để tính basis — dùng offset dự phòng ${basis.current}`);
     const st = src.status();
     if (ref.market === 'futures' && st.coverHigh > st.coverLow) {
-      const half = Math.round(((st.coverHigh - st.coverLow) / 2) * 10) / 10;
+      const half = roundPrice((st.coverHigh - st.coverLow) / 2, st.coverHigh);
       snap.notes.push(`Sổ lệnh futures chỉ phủ khoảng ±${half} quanh giá (snapshot 1000 mức); tường xa hơn không thấy được`);
     }
     return snap;
