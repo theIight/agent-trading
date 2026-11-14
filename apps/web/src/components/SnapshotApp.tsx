@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { fetchAnalysis } from '../api/client.ts';
 import type { ChartController } from '../chart/ChartController.ts';
-import { markSnapshot, type SnapshotParams } from '../snapshotMode.ts';
+import { markSnapshot, snapshotRange, type SnapshotParams } from '../snapshotMode.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 import { ChartView } from './ChartView.tsx';
@@ -52,6 +52,8 @@ export function SnapshotApp({ params }: { params: SnapshotParams }) {
       if (c && c.getSymbol() === symbol && c.getTimeframe() === params.tf && c.getCandles().length) {
         done = true;
         clearInterval(timer);
+        // Bố cục cố định: chart vừa tự cuộn về nến cuối (scrollToRealTime) → đặt lại khung nhìn 120 nến ở 60% trái.
+        c.chart.timeScale().setVisibleLogicalRange(snapshotRange(c.getCandles().length - 1));
         requestAnimationFrame(() => requestAnimationFrame(() => setTimeout(() => markSnapshot('ready'), 300)));
       }
     }, 100);
@@ -63,6 +65,7 @@ export function SnapshotApp({ params }: { params: SnapshotParams }) {
       <main className="main">
         {symbol && (
           <ChartView
+            snapshot
             onStatus={() => {}}
             onReady={c => {
               ctrlRef.current = c;

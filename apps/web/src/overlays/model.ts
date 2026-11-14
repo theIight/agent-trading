@@ -158,6 +158,52 @@ export interface OverlayModel {
 
 export const EMPTY_MODEL: OverlayModel = { markers: [], rects: [], bands: [], lines: [], priceLines: [], orderflowLines: [], futureBars: 0 };
 
+/** rightOffset tối thiểu (số nến) của chart web. */
+export const BASE_RIGHT_OFFSET = 12;
+/** Web: khoảng trống tương lai không vượt tỉ lệ này × số nến đang nhìn thấy. */
+export const MAX_RIGHT_OFFSET_FRAC = 0.4;
+
+/** rightOffset của chart web: đủ chỗ cho overlay tương lai nhưng ≤ 40% số nến đang nhìn (không đẩy nến khỏi màn hình). */
+export function webRightOffset(futureBars: number, visibleBars: number): number {
+  const want = Math.max(BASE_RIGHT_OFFSET, futureBars + 6);
+  return Math.min(want, Math.max(1, Math.floor(visibleBars * MAX_RIGHT_OFFSET_FRAC)));
+}
+
+/**
+ * Khoảng giá overlay cần cho thang giá tự co trong khoảng logic [start, end]: hộp (trừ trading range) giao với
+ * khung nhìn và điểm đường nằm trong khung — điểm dự đoán xa ngoài khung không kéo giãn thang giá.
+ */
+export function overlayPriceRange(
+  model: Pick<OverlayModel, 'rects' | 'lines'>,
+  mapTime: (time: number) => number | null,
+  start: number,
+  end: number,
+): { min: number; max: number } | null {
+  let min = Infinity;
+  let max = -Infinity;
+  const add = (p: number) => {
+    min = Math.min(min, p);
+    max = Math.max(max, p);
+  };
+  for (const r of model.rects) {
+    if (r.noAutoscale) continue; // trading range không ép thang giá
+    const a = mapTime(r.t1);
+    const b = mapTime(r.t2);
+    if (a === null || b === null) continue;
+    if (Math.min(a, b) <= end && Math.max(a, b) >= start) {
+      add(r.bottom);
+      add(r.top);
+    }
+  }
+  for (const line of model.lines) {
+    for (const p of line.points) {
+      const x = mapTime(p.time);
+      if (x !== null && x >= start - 1 && x <= end + 1) add(p.price);
+    }
+  }
+  return Number.isFinite(min) ? { min, max } : null;
+}
+
 /** Ánh xạ thời gian (giây) → chỉ số logic (có phần lẻ) trên khung hiện tại; ngoại suy trước/sau dữ liệu. */
 export function makeTimeMapper(candles: readonly Candle[], tf: Timeframe): (time: number) => number | null {
   const step = tfSeconds(tf);
@@ -221,6 +267,10 @@ export interface BuildOptions {
   showReferenceSetups?: boolean;
   /** Order flow hiện tại (live) của symbol đang xem: có thì vẽ thay cho order flow của phân tích, kể cả khi chưa có phân tích. */
   liveOrderflow?: LiveOrderflowView | null;
+  /** Ảnh chụp: position tool bắt đầu không sớm hơn mốc này (unix giây) — giữ `asOf` nếu muộn hơn. */
+  toolStartTime?: number;
+  /** Ảnh chụp: position tool kéo tới mốc này (mép phải khung nhìn) thay cho `validUntil`. */
+  toolEndTime?: number;
 }
 
 type OrderflowLevels = NonNullable<AnalysisResult['orderflow']>['levels'];
@@ -450,8 +500,9 @@ export function buildOverlayModel(
   }
 
   if (layers.action) {
-    const t1 = snapToBar(candles, currentTf, analysis.asOf) ?? last.time;
-    const defaultT2 = last.time + (opts.positionToolBars ?? 25) * curSec;
+    const asOfBar = snapToBar(candles, currentTf, analysis.asOf) ?? last.time;
+    const t1 = opts.toolStartTime !== undefined ? Math.max(asOfBar, opts.toolStartTime) : asOfBar;
+    const defaultT2 = opts.toolEndTime ?? last.time + (opts.positionToolBars ?? 25) * curSec;
     const plan = analysis.tradePlan;
     const tools: PositionTool[] = [];
     if (plan) {
@@ -469,7 +520,7 @@ export function buildOverlayModel(
           stopLoss: st.stopLoss,
           takeProfits: st.takeProfits,
           t1,
-          t2: st.validUntil && st.validUntil > last.time ? st.validUntil : defaultT2,
+          t2: opts.toolEndTime === undefined && st.validUntil && st.validUntil > last.time ? st.validUntil : defaultT2,
           pending,
           title: `${prefix}${st.direction}${rr}`,
           refined: st.refinedEntry ? { tf: st.refinedEntry.tf, distance: st.refinedEntry.estStopDistance } : undefined,
