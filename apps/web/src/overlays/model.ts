@@ -126,6 +126,11 @@ export interface OrderflowLineItem {
   t2?: number | null;
   /** Dấu × ở cuối đoạn (tường bị quét). */
   endMark?: boolean;
+  /** Loại vạch để renderer tô màu theo cài đặt (`orderflowStyle.ts`); thiếu = giữ `color`/`width` như model. */
+  kind?: 'wall' | 'pulled' | 'poc';
+  side?: 'BID' | 'ASK';
+  /** Khối lượng so với tường lớn nhất đang vẽ (0–1), dùng cho thang màu heatmap. */
+  ratio?: number;
 }
 
 /** Tối đa số đoạn tường đã bị quét / bị rút hiển thị (gần nhất). */
@@ -520,6 +525,9 @@ export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[
           label: fmtSize(w.size!),
           width: Math.round((OF_MIN_WIDTH + (OF_MAX_WIDTH - OF_MIN_WIDTH) * ratio) * 10) / 10,
           dashed: false,
+          kind: 'wall',
+          side: ask ? 'ASK' : 'BID',
+          ratio: Math.round(ratio * 1000) / 1000,
         });
       });
   }
@@ -527,7 +535,7 @@ export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[
   for (const lv of placed) {
     if (lv.kind !== 'POC' || pocs.has(lv.price!)) continue;
     pocs.add(lv.price!);
-    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC', width: 1, dashed: true });
+    out.push({ price: lv.price!, color: COLORS.ofPoc, textColor: COLORS.ofPocText, label: 'POC', width: 1, dashed: true, kind: 'poc' });
   }
   return out;
 }
@@ -569,6 +577,9 @@ export function buildWallSegmentLines(segments: readonly WallSegment[]): Orderfl
     t1: s.start,
     t2: s.end,
     endMark: s.status === 'consumed',
+    kind: 'wall',
+    side: s.side,
+    ratio: maxDrawn ? Math.round((s.peakSize / maxDrawn) * 1000) / 1000 : 1,
   });
   return [
     ...active.map(solid),
@@ -582,6 +593,8 @@ export function buildWallSegmentLines(segments: readonly WallSegment[]): Orderfl
       dashed: true,
       t1: s.start,
       t2: s.end,
+      kind: 'pulled' as const,
+      side: s.side,
     })),
   ];
 }

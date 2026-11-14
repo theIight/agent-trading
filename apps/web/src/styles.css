@@ -63,6 +63,41 @@ button, input { font: inherit; color: inherit; }
   font-weight: 600;
 }
 
+.symbol-suggest {
+  position: fixed;
+  z-index: 50;
+  margin: 0;
+  padding: 4px 0;
+  list-style: none;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--panel);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.25);
+}
+.symbol-suggest li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.symbol-suggest li.active { background: var(--border); }
+.symbol-suggest li.current .sym { color: var(--accent); }
+.symbol-suggest .sym { font-weight: 600; }
+.symbol-suggest .tag { margin-left: auto; color: var(--muted); font-size: 11px; }
+.symbol-suggest .remove {
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  cursor: pointer;
+}
+.symbol-suggest .remove:hover { color: var(--down); }
+
 .tf-group { display: flex; gap: 2px; }
 
 .tf-group button, .icon-btn {
@@ -152,6 +187,7 @@ button, input { font: inherit; color: inherit; }
 .of-chart-status.down { color: var(--down); }
 .liq-chart-status { top: 74px; }
 .volagg-chart-status { top: 90px; }
+.bookheat-chart-status { top: 106px; }
 .vol-spot { color: #ff9800; }
 
 /* ---------- Panel phân tích ---------- */
@@ -411,6 +447,14 @@ button, input { font: inherit; color: inherit; }
 .settings-ctrl { display: flex; align-items: center; gap: 8px; }
 .settings-ctrl input[type='range'] { flex: 1; }
 .settings-ctrl b { min-width: 72px; text-align: right; font-weight: 600; }
+.heat-stops { flex-wrap: wrap; }
+.heat-stop { display: flex; flex-direction: column; align-items: center; gap: 1px; cursor: pointer; }
+.heat-stop input[type='color'] { width: 30px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; }
+.heat-stop small { font-size: 10px; color: var(--muted, #868993); }
+.settings-row select { padding: 2px 6px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
 .settings-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
 .settings-foot .muted { font-size: 11px; }
 .settings-foot button { white-space: nowrap; }
+
+/* Chế độ snapshot (server chụp gửi Telegram): chỉ chart, không nút lớp. */
+.snapshot .layer-toggles { display: none; }

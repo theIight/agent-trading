@@ -30,6 +30,10 @@ import { LiquidationService } from './liquidation/service.ts';
 import { parseLeverage } from './liquidation/model.ts';
 import { VolumeAggService } from './volumeAgg/service.ts';
 import { makeVolumeFetcher } from './volumeAgg/sources.ts';
+import { ChartSnapshotter } from './notify/chartSnapshot.ts';
+import { TelegramClient } from './notify/telegramClient.ts';
+import { TelegramNotifier } from './notify/telegramNotifier.ts';
+import { TelegramBot } from './notify/telegramBot.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -202,7 +206,44 @@ export async function buildApp(deps: AppDeps = {}) {
   registerKlineRoutes(app, klines, router, lives);
   registerAnalysisRoutes(app, service, repo, internalToken);
 
+  // Telegram: phân tích kết thúc → chụp chart (Chrome headless) + gửi tóm tắt. Thiếu token / chat id → tắt.
+  const snapshotter = cfg.telegramBotToken && cfg.telegramChatId ? new ChartSnapshotter({ webUrl: cfg.snapshotWebUrl, channel: cfg.snapshotChromeChannel }) : null;
+  const tgClient = snapshotter && cfg.telegramBotToken ? new TelegramClient({ token: cfg.telegramBotToken, threadId: cfg.telegramThreadId }) : null;
+  const notifier =
+    snapshotter && tgClient && cfg.telegramChatId
+      ? new TelegramNotifier({
+          chatId: cfg.telegramChatId,
+          sender: tgClient,
+          capture: snapshotter.capture,
+          tfs: cfg.telegramTfs,
+          notifyFailed: cfg.telegramNotifyFailed,
+          log: msg => app.log.info(msg),
+        })
+      : null;
+  const stopTelegram = notifier?.start(listener => service.subscribe(listener)) ?? null;
+  if (stopTelegram) app.log.info(`[telegram] bật: gửi kết quả phân tích, chụp chart từ ${cfg.snapshotWebUrl}`);
+  // Bot nhận lệnh trong group (long polling). Chỉ chat trong whitelist.
+  const stopBot =
+    notifier && tgClient && cfg.telegramChatId && cfg.telegramBotCommands
+      ? new TelegramBot({
+          api: tgClient,
+          service,
+          repo,
+          notifier,
+          allowedChats: [...new Set([cfg.telegramChatId, ...cfg.telegramAllowedChats])],
+          allowedUsers: cfg.telegramAllowedUsers,
+          mainChatId: cfg.telegramChatId,
+          mainThreadId: cfg.telegramThreadId,
+          defaults: { primaryTf: cfg.telegramBotDefaultTf, contextTfs: cfg.telegramBotDefaultContext },
+          maxPendingPerChat: cfg.telegramBotMaxPending,
+          log: msg => app.log.info(msg),
+        }).start()
+      : null;
+
   app.addHook('onClose', async () => {
+    stopTelegram?.();
+    await stopBot?.();
+    await snapshotter?.close();
     for (const c of collectors) c.stop();
     for (const c of liqCollectors) c.stop();
     liquidation?.stop();

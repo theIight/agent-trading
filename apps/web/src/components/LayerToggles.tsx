@@ -3,6 +3,7 @@ import { LAYER_KEYS, LAYER_LABELS } from '../overlays/model.ts';
 import { useAnalysisStore } from '../store/useAnalysisStore.ts';
 import { useLiquidationStore } from '../store/useLiquidationStore.ts';
 import { useOrderflowStore } from '../store/useOrderflowStore.ts';
+import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 import { useAppStore } from '../store/useAppStore.ts';
 import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 
@@ -13,6 +14,7 @@ export function LayerToggles() {
   const symbol = useAppStore(s => s.symbol);
   const volAggSupported = useAnalysisStore(s => s.volumeAggSymbols.includes(symbol));
   const { source: volSource, setSource: setVolSource } = useVolumeAggStore();
+  const { show: showBookHeat, toggle: toggleBookHeat } = useBookHeatmapStore();
   if (!current && !live && !liq && !volAggSupported) return null;
   // Chưa có phân tích: chỉ có toggle Order flow (live) và thanh lý.
   const keys = current ? LAYER_KEYS.filter(k => k !== 'orderflow' || current.orderflow || live) : live ? (['orderflow'] as const) : [];
@@ -24,6 +26,12 @@ export function LayerToggles() {
           {LAYER_LABELS[k]}
         </label>
       ))}
+      {live && (
+        <label title="Khối lượng lệnh chờ trung bình theo bucket giá × nến (Binance, 24 giờ gần nhất). Sáng = thanh khoản dày. Vàng: sổ lệnh futures chỉ phủ dải hẹp quanh giá">
+          <input type="checkbox" checked={showBookHeat} onChange={toggleBookHeat} />
+          Heatmap sổ lệnh
+        </label>
+      )}
       {volAggSupported && (
         <label
           className="vol-source"

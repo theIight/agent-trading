@@ -1,10 +1,11 @@
 import { LineStyle, createSeriesMarkers, type IPriceLine, type ISeriesMarkersPluginApi, type Time, type UTCTimestamp } from 'lightweight-charts';
-import type { AnalysisResult, LiveLiquidations } from '@wca/shared';
+import type { AnalysisResult, BookHeatmap, LiveLiquidations } from '@wca/shared';
 import type { ChartController } from '../chart/ChartController.ts';
 import { THEMES, type ThemeName } from '../chart/theme.ts';
 import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, type LayerVisibility, type LiveOrderflowView, type OverlayModel } from './model.ts';
 import { OverlayPrimitive } from './OverlayPrimitive.ts';
 import { LiquidationPrimitive } from './LiquidationPrimitive.ts';
+import { BookHeatmapPrimitive } from './BookHeatmapPrimitive.ts';
 
 export interface LiquidationView {
   data: LiveLiquidations;
@@ -27,6 +28,8 @@ export class OverlayManager {
   private theme: ThemeName = 'dark';
   private readonly primitive = new OverlayPrimitive();
   private readonly liqPrimitive = new LiquidationPrimitive();
+  private readonly bookHeatPrimitive = new BookHeatmapPrimitive();
+  private bookHeatmap: { data: BookHeatmap; show: boolean } | null = null;
   private liquidation: LiquidationView | null = null;
   private readonly markers: ISeriesMarkersPluginApi<Time>;
   private priceLines: IPriceLine[] = [];
@@ -35,6 +38,7 @@ export class OverlayManager {
   private liveOrderflow: (LiveOrderflowView & { symbol: string }) | null = null;
 
   constructor(private readonly ctrl: ChartController) {
+    ctrl.candleSeries.attachPrimitive(this.bookHeatPrimitive);
     ctrl.candleSeries.attachPrimitive(this.liqPrimitive);
     ctrl.candleSeries.attachPrimitive(this.primitive);
     this.markers = createSeriesMarkers(ctrl.candleSeries, []);
@@ -69,6 +73,21 @@ export class OverlayManager {
   setLiquidation(view: LiquidationView | null): void {
     this.liquidation = view;
     this.renderLiquidation();
+  }
+
+  /** Heatmap sổ lệnh của symbol đang xem; null = không có. */
+  setBookHeatmap(view: { data: BookHeatmap; show: boolean } | null): void {
+    this.bookHeatmap = view;
+    this.renderBookHeatmap();
+  }
+
+  private renderBookHeatmap(): void {
+    const v = this.bookHeatmap?.data.symbol === this.ctrl.getSymbol() ? this.bookHeatmap : null;
+    this.bookHeatPrimitive.setData({
+      heatmap: v?.data ?? null,
+      show: Boolean(v?.show),
+      mapTime: makeTimeMapper(this.ctrl.getCandles(), this.ctrl.getTimeframe()),
+    });
   }
 
   private renderLiquidation(): void {
@@ -124,6 +143,7 @@ export class OverlayManager {
 
     this.primitive.setData(model, makeTimeMapper(candles, tf), THEMES[this.theme].text);
     this.renderLiquidation();
+    this.renderBookHeatmap();
     this.ctrl.chart.timeScale().applyOptions({ rightOffset: Math.max(BASE_RIGHT_OFFSET, model.futureBars + 6) });
   }
 
@@ -131,5 +151,6 @@ export class OverlayManager {
     this.markers.detach();
     this.ctrl.candleSeries.detachPrimitive(this.primitive);
     this.ctrl.candleSeries.detachPrimitive(this.liqPrimitive);
+    this.ctrl.candleSeries.detachPrimitive(this.bookHeatPrimitive);
   }
 }

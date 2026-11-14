@@ -19,6 +19,11 @@ function tfList(name: string, fallback: Timeframe[]): Timeframe[] {
   return list.length ? list : fallback;
 }
 
+/** Danh sách id số (Telegram chat / user id, có thể âm), phân cách dấu phẩy. */
+function idList(name: string): string[] {
+  return (process.env[name] ?? '').split(',').map(s => s.trim()).filter(s => /^-?\d{1,20}$/.test(s));
+}
+
 function runnerList(name: string, fallback: RunnerId[]): RunnerId[] {
   const raw = process.env[name];
   if (!raw) return fallback;
@@ -165,6 +170,29 @@ export const config = {
   volAggSymbols: (process.env.VOLAGG_SYMBOLS ?? 'BTCUSDT').split(',').map(s => s.trim().toUpperCase()).filter(Boolean),
   /** Đột biến khi volume nhóm > hệ số này × trung vị 20 nến trước. */
   volAggSpikeX: Number(process.env.VOLAGG_SPIKE_X) > 1 ? Number(process.env.VOLAGG_SPIKE_X) : 3,
+  /** Telegram: gửi ảnh chart khi phân tích kết thúc. Thiếu token hoặc chat id → tắt. */
+  telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() || undefined,
+  telegramChatId: process.env.TELEGRAM_CHAT_ID?.trim() || undefined,
+  /** Topic trong group (forum); rỗng = gửi thẳng vào chat. */
+  telegramThreadId: Number.parseInt(process.env.TELEGRAM_THREAD_ID ?? '', 10) > 0 ? Number.parseInt(process.env.TELEGRAM_THREAD_ID!, 10) : undefined,
+  /** `all` = mỗi khung của phân tích một ảnh; `primary` = chỉ khung chính. */
+  telegramTfs: (process.env.TELEGRAM_TFS === 'primary' ? 'primary' : 'all') as 'all' | 'primary',
+  telegramNotifyFailed: process.env.TELEGRAM_NOTIFY_FAILED !== '0',
+  /** Bot nhận lệnh trong group (long polling). Cần token + chat id; `0` = chỉ gửi một chiều. */
+  telegramBotCommands: process.env.TELEGRAM_BOT_COMMANDS !== '0',
+  /** Chat id thêm được ra lệnh (ngoài TELEGRAM_CHAT_ID). */
+  telegramAllowedChats: idList('TELEGRAM_ALLOWED_CHATS'),
+  /** Giới hạn user id được ra lệnh; rỗng = mọi thành viên chat được phép. */
+  telegramAllowedUsers: idList('TELEGRAM_ALLOWED_USERS'),
+  /** Khung chính / khung phụ khi lệnh `/analyze` không nêu khung. */
+  telegramBotDefaultTf: (isTimeframe(process.env.TELEGRAM_BOT_DEFAULT_TF?.trim().toLowerCase()) ? process.env.TELEGRAM_BOT_DEFAULT_TF!.trim().toLowerCase() : '4h') as Timeframe,
+  telegramBotDefaultContext: tfList('TELEGRAM_BOT_DEFAULT_CONTEXT', ['1d', '1h', '1m']),
+  /** Số phân tích bot tạo đang chờ/chạy tối đa mỗi chat. */
+  telegramBotMaxPending: Math.max(1, int('TELEGRAM_BOT_MAX_PENDING', 2)),
+  /** Web để Chrome headless mở trang `?snapshot=` (pm2: vite preview 5173). */
+  snapshotWebUrl: (process.env.SNAPSHOT_WEB_URL || 'http://127.0.0.1:5173').replace(/\/+$/, ''),
+  /** Channel Playwright: `chrome` = Chrome đã cài; rỗng = Chromium của Playwright. */
+  snapshotChromeChannel: process.env.SNAPSHOT_CHROME_CHANNEL === undefined ? 'chrome' : process.env.SNAPSHOT_CHROME_CHANNEL || undefined,
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

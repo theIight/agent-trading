@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { DISPLAY_RANGES, type DisplaySettings } from '../chart/displaySettings.ts';
+import { DISPLAY_RANGES, HEAT_STOP_LABELS, OF_COLOR_MODES, type DisplaySettings, type HeatStops, type OfColorMode } from '../chart/displaySettings.ts';
+import { defaultHeatStops } from '../overlays/orderflowStyle.ts';
+import { useAppStore } from '../store/useAppStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 
 // Nút ⚙: bảng cài đặt hiển thị chart (cỡ chữ, ngưỡng đột biến, độ đậm heatmap, bong bóng thanh lý, đếm ngược).
@@ -10,6 +12,9 @@ const KEYS = Object.keys(DISPLAY_RANGES) as NumKey[];
 export function SettingsButton() {
   const [open, setOpen] = useState(false);
   const { settings, update, reset } = useChartSettingsStore();
+  const theme = useAppStore(s => s.theme);
+  // Chưa tự chọn → ô màu hiện thang mặc định của theme đang dùng.
+  const heatStops = settings.ofHeatStops ?? defaultHeatStops(theme === 'light');
   const ref = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -57,6 +62,36 @@ export function SettingsButton() {
               </label>
             );
           })}
+          <label className="settings-row check">
+            <span>Màu order flow</span>
+            <select value={settings.ofColorMode} onChange={e => update({ ofColorMode: e.target.value as OfColorMode })}>
+              {OF_COLOR_MODES.map(m => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          {settings.ofColorMode === 'bookmap' && (
+            <div className="settings-row">
+              <span>Thang màu tường (nhỏ → lớn)</span>
+              <span className="settings-ctrl heat-stops">
+                {heatStops.map((c, i) => (
+                  <label key={HEAT_STOP_LABELS[i]} className="heat-stop" title={`Tường ${HEAT_STOP_LABELS[i]} so với tường lớn nhất`}>
+                    <input
+                      type="color"
+                      value={c}
+                      onChange={e => update({ ofHeatStops: heatStops.map((h, j) => (j === i ? e.target.value : h)) as HeatStops })}
+                    />
+                    <small>{HEAT_STOP_LABELS[i]}</small>
+                  </label>
+                ))}
+                <button type="button" className="chip ghost" disabled={!settings.ofHeatStops} onClick={() => update({ ofHeatStops: null })}>
+                  Màu mặc định
+                </button>
+              </span>
+            </div>
+          )}
           <label className="settings-row check">
             <span>Hiện đếm ngược đóng nến</span>
             <input type="checkbox" checked={settings.showCountdown} onChange={e => update({ showCountdown: e.target.checked })} />
