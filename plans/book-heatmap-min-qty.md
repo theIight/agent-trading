@@ -30,3 +30,11 @@ Heatmap sổ lệnh vẽ quá nhiều ô (lệnh nhỏ), khó nhìn. Hiện ch�
 
 ## Approval Status
 Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.
+
+## Ghi chú triển khai
+- Cài đặt hiển thị thực tế lưu ở key `wca:chartSettings` (plan ghi `wca:display` — key đó không tồn tại); `bookHeatMinQty` nằm trong object này.
+- Đơn vị lấy từ `BookHeatmap.unit` (server trả, vd BTC / oz) thay vì `bookmapSizeUnit` (hàm đó trả `lot` cho XAUUSD — đơn vị Bookmap MT5, không phải sổ lệnh nguồn); chưa có dữ liệu → base của `...USDT`.
+- Gợi ý p50/p90/p99: `BookHeatmapPrimitive` tính `heatStats` theo vùng nhìn (cache riêng, không phụ thuộc ngưỡng) và đẩy vào `useBookHeatmapStore.viewStats` (microtask, chỉ set khi đổi); bảng ⚙ đọc từ store. Các số gợi ý bấm được để đặt làm ngưỡng. Lớp heatmap tắt → hiện dòng nhắc bật lớp.
+- Phân vị `hidePct` tính trên các ô còn lại (≥ minQty) nên khi `hidePct > 0` ngưỡng hiệu lực luôn ≥ minQty.
+- Sửa kèm: nhãn đơn vị thanh trượt `bookHeatHidePct` trước hiện nhầm "× ngưỡng" thay vì "%".
+- Không sửa `OverlayManager.ts`. Chưa build/restart `wca-web` (chờ người dùng).

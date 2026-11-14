@@ -11,9 +11,10 @@ import type {
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import type { BookHeatmap } from '@wca/shared';
-import { bookHeatColor, heatScale, intensityOf, type HeatScale } from './bookHeatmapModel.ts';
+import { bookHeatColor, heatScale, heatStats, intensityOf, type HeatScale } from './bookHeatmapModel.ts';
 import { timeToX, type TimeMapper } from './LiquidationPrimitive.ts';
-import { display } from '../chart/displaySettings.ts';
+import { bookHeatMinQtyOf, display } from '../chart/displaySettings.ts';
+import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 
 // Heatmap sổ lệnh: khối lượng lệnh chờ trung bình theo bucket × cột, vẽ sau nến.
 
@@ -40,8 +41,10 @@ function palette(opacity: number): string[] {
 }
 
 class Renderer implements IPrimitivePaneRenderer {
-  /** Thang màu cache theo (bản dữ liệu, ngưỡng ẩn, vùng nhìn thấy). */
+  /** Thang màu cache theo (bản dữ liệu, ngưỡng ẩn, ngưỡng khối lượng, vùng nhìn thấy). */
   private scaleKey: { h: BookHeatmap; key: string } | null = null;
+  /** Thống kê gợi ý cache theo (bản dữ liệu, vùng nhìn thấy) — không phụ thuộc ngưỡng. */
+  private statsKey: { h: BookHeatmap; key: string } | null = null;
   private scale: HeatScale = { steps: [], min: 0 };
   constructor(private readonly ctx: Ctx) {}
   draw(): void {}
@@ -61,10 +64,18 @@ class Renderer implements IPrimitivePaneRenderer {
       // Thang theo vùng nhìn thấy; key làm tròn để kéo/zoom nhẹ không tính lại liên tục.
       const span = view.high - view.low;
       const r = (x: number) => Math.round(x / (span / 20 || 1));
-      const key = `${s.bookHeatHidePct}:${view.c0}:${view.c1}:${r(view.low)}:${r(view.high)}`;
+      const viewKey = `${view.c0}:${view.c1}:${r(view.low)}:${r(view.high)}`;
+      const minQty = bookHeatMinQtyOf(s, h.symbol);
+      const key = `${s.bookHeatHidePct}:${minQty}:${viewKey}`;
       if (!this.scaleKey || this.scaleKey.h !== h || this.scaleKey.key !== key) {
-        this.scale = heatScale(h, s.bookHeatHidePct, view);
+        this.scale = heatScale(h, s.bookHeatHidePct, view, minQty);
         this.scaleKey = { h, key };
+      }
+      if (!this.statsKey || this.statsKey.h !== h || this.statsKey.key !== viewKey) {
+        this.statsKey = { h, key: viewKey };
+        const st = heatStats(h, view);
+        // Ngoài vòng vẽ: cập nhật store làm React render lại bảng ⚙.
+        queueMicrotask(() => useBookHeatmapStore.getState().setViewStats(st && { ...st, symbol: h.symbol }));
       }
       const scale = this.scale;
       const min = scale.min;

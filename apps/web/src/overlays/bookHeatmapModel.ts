@@ -58,11 +58,8 @@ export interface HeatView {
   high: number;
 }
 
-/**
- * Thang màu theo phân vị khối lượng các ô (`hidePct` 0–100). Có `view` → chỉ xét ô trong vùng đang nhìn thấy
- * (tự chỉnh tương phản: zoom vào dải sổ lệnh dày vẫn phân biệt được mức dày/mỏng).
- */
-export function heatScale(h: BookHeatmap, hidePct: number, view?: HeatView): HeatScale {
+/** Khối lượng các ô (tăng dần); có `view` → chỉ ô trong vùng đang nhìn thấy. */
+function cellQtys(h: BookHeatmap, view?: HeatView): number[] {
   const qs: number[] = [];
   const c0 = view ? Math.max(0, view.c0) : 0;
   const c1 = view ? Math.min(h.data.length - 1, view.c1) : h.data.length - 1;
@@ -77,9 +74,37 @@ export function heatScale(h: BookHeatmap, hidePct: number, view?: HeatView): Hea
       qs.push(flat[i + 1]!);
     }
   }
-  qs.sort((a, b) => a - b);
+  return qs.sort((a, b) => a - b);
+}
+
+/**
+ * Thang màu theo phân vị khối lượng các ô (`hidePct` 0–100). Có `view` → chỉ xét ô trong vùng đang nhìn thấy
+ * (tự chỉnh tương phản: zoom vào dải sổ lệnh dày vẫn phân biệt được mức dày/mỏng).
+ * `minQty` > 0: bỏ ô < minQty TRƯỚC khi tính phân vị (thang màu chỉ trên ô còn hiển thị);
+ * ngưỡng ẩn = max(minQty, phân vị `hidePct` của các ô còn lại).
+ */
+export function heatScale(h: BookHeatmap, hidePct: number, view?: HeatView, minQty = 0): HeatScale {
+  let qs = cellQtys(h, view);
+  const floor = Number.isFinite(minQty) && minQty > 0 ? minQty : 0;
+  if (floor > 0) qs = qs.filter(q => q >= floor);
   const steps = qs.length ? Array.from({ length: SCALE_STEPS + 1 }, (_, i) => quantile(qs, i / SCALE_STEPS)) : [];
-  return { steps, min: hidePct > 0 ? quantile(qs, hidePct / 100) : 0 };
+  const pct = hidePct > 0 ? quantile(qs, hidePct / 100) : 0;
+  return { steps, min: Math.max(floor, pct) };
+}
+
+export interface HeatStats {
+  p50: number;
+  p90: number;
+  p99: number;
+  /** Số ô đã xét. */
+  n: number;
+}
+
+/** Trung vị · p90 · p99 khối lượng ô (trong `view` nếu có) — gợi ý chọn ngưỡng; không có ô → null. */
+export function heatStats(h: BookHeatmap, view?: HeatView): HeatStats | null {
+  const qs = cellQtys(h, view);
+  if (!qs.length) return null;
+  return { p50: quantile(qs, 0.5), p90: quantile(qs, 0.9), p99: quantile(qs, 0.99), n: qs.length };
 }
 
 /**
