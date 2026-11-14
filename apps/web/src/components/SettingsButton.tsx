@@ -1,13 +1,105 @@
-import { useEffect, useRef, useState } from 'react';
-import { DISPLAY_RANGES, HEAT_STOP_LABELS, OF_COLOR_MODES, type DisplaySettings, type HeatStops, type OfColorMode } from '../chart/displaySettings.ts';
+import { Fragment, useEffect, useRef, useState } from 'react';
+import {
+  DISPLAY_RANGES,
+  HEAT_STOP_LABELS,
+  OF_COLOR_MODES,
+  bookHeatMinQtyOf,
+  withBookHeatMinQty,
+  type DisplaySettings,
+  type HeatStops,
+  type OfColorMode,
+} from '../chart/displaySettings.ts';
 import { defaultHeatStops } from '../overlays/orderflowStyle.ts';
 import { useAppStore } from '../store/useAppStore.ts';
+import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 
 // Nút ⚙: bảng cài đặt hiển thị chart (cỡ chữ, ngưỡng đột biến, độ đậm heatmap, bong bóng thanh lý, đếm ngược).
 
 type NumKey = keyof typeof DISPLAY_RANGES;
 const KEYS = Object.keys(DISPLAY_RANGES) as NumKey[];
+
+/** Đơn vị hiển thị sau giá trị thanh trượt (px, ×, % viết liền; còn lại cách một khoảng). */
+const unitSuffix = (unit: string) => (unit === 'px' || unit === '×' || unit === '%' ? unit : ` ${unit}`);
+
+/** Số khối lượng gọn cho gợi ý / ô nhập (giữ 2 chữ số có nghĩa với số nhỏ). */
+function fmtQty(n: number): string {
+  if (n >= 100) return String(Math.round(n));
+  if (n >= 10) return String(Math.round(n * 10) / 10);
+  return String(Number(n.toPrecision(2)));
+}
+
+/** Đơn vị base của symbol khi chưa có dữ liệu heatmap (BTCUSDT → BTC). */
+const baseUnit = (symbol: string) => (symbol.endsWith('USDT') ? symbol.slice(0, -4) : '');
+
+/** Heatmap sổ lệnh: ngưỡng khối lượng tuyệt đối của symbol đang xem + gợi ý phân vị trong vùng đang nhìn. */
+function BookHeatMinQtyRow() {
+  const { settings, update } = useChartSettingsStore();
+  const symbol = useBookHeatmapStore(s => s.symbol);
+  const unit = useBookHeatmapStore(s => (s.data && s.data.symbol === s.symbol ? s.data.unit : null));
+  const stats = useBookHeatmapStore(s => (s.viewStats && s.viewStats.symbol === s.symbol ? s.viewStats : null));
+  const saved = symbol ? bookHeatMinQtyOf(settings, symbol) : 0;
+  // Bản nháp chuỗi để gõ được "0." / xoá trống; đổi symbol hoặc giá trị lưu khác bản nháp → đồng bộ lại.
+  const [draft, setDraft] = useState(saved ? String(saved) : '');
+  useEffect(() => setDraft(d => (Number(d || 0) === saved ? d : saved ? String(saved) : '')), [symbol, saved]);
+  if (!symbol) return null;
+  const u = unit ?? baseUnit(symbol);
+  const commit = (qty: number) => update({ bookHeatMinQty: withBookHeatMinQty(settings.bookHeatMinQty, symbol, qty) });
+  return (
+    <div className="settings-row">
+      <span>
+        Heatmap sổ lệnh: chỉ hiện ô ≥ <small className="muted">({symbol})</small>
+      </span>
+      <span className="settings-ctrl">
+        <input
+          className="min-qty"
+          type="number"
+          inputMode="decimal"
+          min={0}
+          step="any"
+          placeholder="tắt"
+          aria-label={`Ngưỡng khối lượng heatmap sổ lệnh ${symbol}`}
+          value={draft}
+          onChange={e => {
+            setDraft(e.target.value);
+            const v = e.target.value.trim() === '' ? 0 : Number(e.target.value);
+            if (Number.isFinite(v) && v >= 0) commit(v);
+          }}
+        />
+        <span>{u}</span>
+        {saved > 0 && (
+          <button type="button" className="chip ghost" onClick={() => commit(0)}>
+            Tắt
+          </button>
+        )}
+      </span>
+      <small className="muted min-qty-hint">
+        {stats ? (
+          <>
+            Vùng đang nhìn:{' '}
+            {(
+              [
+                ['trung vị', stats.p50],
+                ['p90', stats.p90],
+                ['p99', stats.p99],
+              ] as const
+            ).map(([label, q], i) => (
+              <Fragment key={label}>
+                {i > 0 && ' · '}
+                <button type="button" className="link-btn" title="Dùng làm ngưỡng" onClick={() => commit(Number(fmtQty(q)))}>
+                  {label} {fmtQty(q)}
+                </button>
+              </Fragment>
+            ))}{' '}
+            {u}
+          </>
+        ) : (
+          'Bật lớp heatmap sổ lệnh để xem gợi ý theo vùng đang nhìn.'
+        )}
+      </small>
+    </div>
+  );
+}
 
 export function SettingsButton() {
   const [open, setOpen] = useState(false);
@@ -43,23 +135,26 @@ export function SettingsButton() {
             const r = DISPLAY_RANGES[k];
             const v = settings[k];
             return (
-              <label key={k} className="settings-row">
-                <span>{r.label}</span>
-                <span className="settings-ctrl">
-                  <input
-                    type="range"
-                    min={r.min}
-                    max={r.max}
-                    step={r.step}
-                    value={v}
-                    onChange={e => update({ [k]: Number(e.target.value) } as Partial<DisplaySettings>)}
-                  />
-                  <b>
-                    {v}
-                    {r.unit === 'px' ? 'px' : r.unit === '×' ? '×' : `× ngưỡng`}
-                  </b>
-                </span>
-              </label>
+              <Fragment key={k}>
+                <label className="settings-row">
+                  <span>{r.label}</span>
+                  <span className="settings-ctrl">
+                    <input
+                      type="range"
+                      min={r.min}
+                      max={r.max}
+                      step={r.step}
+                      value={v}
+                      onChange={e => update({ [k]: Number(e.target.value) } as Partial<DisplaySettings>)}
+                    />
+                    <b>
+                      {v}
+                      {unitSuffix(r.unit)}
+                    </b>
+                  </span>
+                </label>
+                {k === 'bookHeatHidePct' && <BookHeatMinQtyRow />}
+              </Fragment>
             );
           })}
           <label className="settings-row check">

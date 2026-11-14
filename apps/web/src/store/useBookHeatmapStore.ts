@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { BookHeatmap, Timeframe } from '@wca/shared';
 import { fetchBookHeatmap } from '../api/client.ts';
-import { lastClosedCol, mergeHeatmap } from '../overlays/bookHeatmapModel.ts';
+import { lastClosedCol, mergeHeatmap, type HeatStats } from '../overlays/bookHeatmapModel.ts';
 import { useLiquidationStore } from './useLiquidationStore.ts';
 
 // Heatmap sổ lệnh của symbol/khung đang xem. Chỉ poll khi lớp đang bật; mỗi lần chỉ tải cột mới (`after`).
@@ -33,6 +33,9 @@ interface BookHeatmapState {
   data: BookHeatmap | null;
   error: string | null;
   show: boolean;
+  /** Thống kê khối lượng ô trong vùng chart đang nhìn (renderer cập nhật) — gợi ý ngưỡng trong ⚙. */
+  viewStats: (HeatStats & { symbol: string }) | null;
+  setViewStats: (stats: (HeatStats & { symbol: string }) | null) => void;
   watch: (symbol: string | null, tf: Timeframe) => void;
   setShow: (show: boolean) => void;
   toggle: () => void;
@@ -65,10 +68,18 @@ export const useBookHeatmapStore = create<BookHeatmapState>((set, get) => ({
   data: null,
   error: null,
   show: loadShow(),
+  viewStats: null,
+  setViewStats: stats => {
+    const cur = get().viewStats;
+    const same =
+      cur === stats ||
+      (cur && stats && cur.symbol === stats.symbol && cur.p50 === stats.p50 && cur.p90 === stats.p90 && cur.p99 === stats.p99 && cur.n === stats.n);
+    if (!same) set({ viewStats: stats });
+  },
   watch: (symbol, tf) => {
     const key = symbol ? `${symbol}:${tf}` : null;
     if (key === get().key) return;
-    set({ key, symbol, tf, data: null, error: null });
+    set({ key, symbol, tf, data: null, error: null, viewStats: null });
     restart(get, set);
   },
   setShow: show => {

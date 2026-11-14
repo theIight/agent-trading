@@ -452,6 +452,9 @@ button, input { font: inherit; color: inherit; }
 .heat-stop input[type='color'] { width: 30px; height: 22px; padding: 0; border: 1px solid var(--border); border-radius: 4px; background: none; cursor: pointer; }
 .heat-stop small { font-size: 10px; color: var(--muted, #868993); }
 .settings-row select { padding: 2px 6px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+.settings-ctrl input.min-qty { width: 90px; padding: 2px 6px; font: inherit; color: var(--text); background: var(--panel); border: 1px solid var(--border); border-radius: 4px; }
+.min-qty-hint { font-size: 11px; line-height: 1.5; }
+.min-qty-hint .link-btn { padding: 0; font: inherit; color: var(--accent, #2962ff); background: none; border: 0; cursor: pointer; text-decoration: underline dotted; }
 .settings-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 4px; }
 .settings-foot .muted { font-size: 11px; }
 .settings-foot button { white-space: nowrap; }
