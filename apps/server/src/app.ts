@@ -34,6 +34,10 @@ import { ChartSnapshotter } from './notify/chartSnapshot.ts';
 import { TelegramClient } from './notify/telegramClient.ts';
 import { TelegramNotifier } from './notify/telegramNotifier.ts';
 import { TelegramBot } from './notify/telegramBot.ts';
+import { TelegramMessageStore } from './notify/telegramMessages.ts';
+import { AlertRepo } from './alerts/alertRepo.ts';
+import { AlertWatcher } from './alerts/alertWatcher.ts';
+import { CollectorPriceFeed } from './alerts/priceFeed.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -45,6 +49,8 @@ export interface AppDeps {
   dataDir?: string;
   /** false = không chạy collector order flow Binance (test). */
   orderflow?: boolean;
+  /** false = không chạy watcher alert chạm entry (test). */
+  priceAlerts?: boolean;
 }
 
 /** Token cho API nội bộ (MCP ↔ server); lưu file để MCP chạy từ Claude Code tương tác cũng đọc được. */
@@ -204,11 +210,11 @@ export async function buildApp(deps: AppDeps = {}) {
     volumeAgg: { symbols: volumeAgg?.symbols ?? [] },
   }));
   registerKlineRoutes(app, klines, router, lives);
-  registerAnalysisRoutes(app, service, repo, internalToken);
 
   // Telegram: phân tích kết thúc → chụp chart (Chrome headless) + gửi tóm tắt. Thiếu token / chat id → tắt.
   const snapshotter = cfg.telegramBotToken && cfg.telegramChatId ? new ChartSnapshotter({ webUrl: cfg.snapshotWebUrl, channel: cfg.snapshotChromeChannel }) : null;
   const tgClient = snapshotter && cfg.telegramBotToken ? new TelegramClient({ token: cfg.telegramBotToken, threadId: cfg.telegramThreadId }) : null;
+  const tgMessages = new TelegramMessageStore(db);
   const notifier =
     snapshotter && tgClient && cfg.telegramChatId
       ? new TelegramNotifier({
@@ -217,11 +223,47 @@ export async function buildApp(deps: AppDeps = {}) {
           capture: snapshotter.capture,
           tfs: cfg.telegramTfs,
           notifyFailed: cfg.telegramNotifyFailed,
+          messages: tgMessages,
           log: msg => app.log.info(msg),
         })
       : null;
   const stopTelegram = notifier?.start(listener => service.subscribe(listener)) ?? null;
   if (stopTelegram) app.log.info(`[telegram] bật: gửi kết quả phân tích, chụp chart từ ${cfg.snapshotWebUrl}`);
+  // Alert chạm vùng entry (crypto): chạy cả khi không có Telegram (web vẫn thấy trạng thái).
+  const alertRepo = new AlertRepo(db);
+  const watcher =
+    cfg.priceAlerts && deps.priceAlerts !== false
+      ? new AlertWatcher({
+          repo: alertRepo,
+          klines,
+          isCrypto: symbol => router.sourceOf(symbol) === 'binance-futures',
+          getRecord: id => repo.get(id),
+          maxAgeH: cfg.priceAlertMaxAgeH,
+          sender: tgClient && cfg.telegramChatId ? tgClient : null,
+          destinationOf: id => {
+            const sent = tgMessages.first(id);
+            if (sent) return { chatId: sent.chatId, ...(sent.threadId !== undefined ? { threadId: sent.threadId } : {}), replyTo: sent.messageId };
+            return cfg.telegramChatId ? { chatId: cfg.telegramChatId } : undefined;
+          },
+          beforeSend: notifier ? () => notifier.idle() : undefined,
+          // Đường nhanh: giá khớp của collector order flow Binance (giá nguồn − basis).
+          priceFeed:
+            binanceOrderflow && collectors.length
+              ? new CollectorPriceFeed({
+                  sources: Object.fromEntries(collectors.map(c => [c.symbol, c])),
+                  basisOf: async (symbol, nowSec) => (await binanceOrderflow.basisFn(symbol, nowSec)).current,
+                  log: msg => app.log.warn(msg),
+                })
+              : undefined,
+          log: msg => app.log.info(msg),
+        })
+      : null;
+  const stopWatcher = watcher?.start(listener => service.subscribe(listener)) ?? null;
+  registerAnalysisRoutes(app, service, repo, internalToken, {
+    byAnalysis: id => alertRepo.byAnalysis(id),
+    subscribe: listener => watcher?.subscribe(listener) ?? (() => {}),
+  });
+
   // Bot nhận lệnh trong group (long polling). Chỉ chat trong whitelist.
   const stopBot =
     notifier && tgClient && cfg.telegramChatId && cfg.telegramBotCommands
@@ -235,12 +277,15 @@ export async function buildApp(deps: AppDeps = {}) {
           mainChatId: cfg.telegramChatId,
           mainThreadId: cfg.telegramThreadId,
           defaults: { primaryTf: cfg.telegramBotDefaultTf, contextTfs: cfg.telegramBotDefaultContext },
+          ...(watcher ? { alerts: watcher } : {}),
           maxPendingPerChat: cfg.telegramBotMaxPending,
           log: msg => app.log.info(msg),
         }).start()
       : null;
 
   app.addHook('onClose', async () => {
+    stopWatcher?.();
+    await watcher?.idle();
     stopTelegram?.();
     await stopBot?.();
     await snapshotter?.close();

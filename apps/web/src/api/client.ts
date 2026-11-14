@@ -1,4 +1,4 @@
-import type { AnalysisRecord, BookHeatmap, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, PriceAlert, BookHeatmap, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -130,6 +130,11 @@ export function cancelAnalysis(id: string): Promise<{ ok: boolean }> {
 
 export function fetchAnalysis(id: string): Promise<AnalysisRecord> {
   return request(`/api/analyses/${id}`);
+}
+
+/** Alert chạm entry của từng setup (rỗng khi không canh). */
+export function fetchAlerts(id: string): Promise<PriceAlert[]> {
+  return request(`/api/analyses/${encodeURIComponent(id)}/alerts`);
 }
 
 export function fetchHistory(symbol?: string): Promise<AnalysisRecord[]> {

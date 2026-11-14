@@ -58,6 +58,12 @@ export interface TgUpdate {
   message?: TgMessage;
 }
 
+/** `message_id` từ kết quả sendMessage / sendPhoto (một Message) hoặc sendMediaGroup (mảng Message). */
+function messageIds(result: { message_id: number } | { message_id: number }[] | undefined): number[] {
+  const list = Array.isArray(result) ? result : result ? [result] : [];
+  return list.map(m => m?.message_id).filter((id): id is number => typeof id === 'number');
+}
+
 interface RequestOptions {
   retries?: number;
   timeoutMs?: number;
@@ -77,8 +83,9 @@ export class TelegramClient {
     this.sleep = opts.sleep ?? (ms => new Promise(r => setTimeout(r, ms)));
   }
 
-  async sendMessage(chatId: string, text: string, send: SendOptions = {}): Promise<void> {
-    await this.call(
+  /** Trả `message_id` của tin đã gửi. */
+  async sendMessage(chatId: string, text: string, send: SendOptions = {}): Promise<number[]> {
+    const msg = await this.call<{ message_id: number }>(
       'sendMessage',
       () => {
         const f = new FormData();
@@ -90,13 +97,15 @@ export class TelegramClient {
       },
       send,
     );
+    return messageIds(msg);
   }
 
-  /** 1 ảnh → sendPhoto; 2–10 ảnh → sendMediaGroup (caption ở ảnh đầu); > 10 → nhiều album. Chỉ album đầu trả lời tin gốc. */
-  async sendPhotos(chatId: string, photos: readonly Photo[], caption: string, send: SendOptions = {}): Promise<void> {
+  /** 1 ảnh → sendPhoto; 2–10 ảnh → sendMediaGroup (caption ở ảnh đầu); > 10 → nhiều album. Chỉ album đầu trả lời tin gốc.
+   *  Trả `message_id` của mọi tin đã gửi theo thứ tự (phần tử đầu = ảnh đầu album, dùng để trả lời vào album). */
+  async sendPhotos(chatId: string, photos: readonly Photo[], caption: string, send: SendOptions = {}): Promise<number[]> {
     if (!photos.length) return this.sendMessage(chatId, caption, send);
     if (photos.length === 1) {
-      await this.call(
+      const msg = await this.call<{ message_id: number }>(
         'sendPhoto',
         () => {
           const f = new FormData();
@@ -110,16 +119,17 @@ export class TelegramClient {
         },
         send,
       );
-      return;
+      return messageIds(msg);
     }
+    const ids: number[] = [];
     for (let start = 0; start < photos.length; start += 10) {
       const chunk = photos.slice(start, start + 10);
       const chunkSend = start === 0 ? send : { threadId: send.threadId };
       if (chunk.length === 1) {
-        await this.sendPhotos(chatId, chunk, '', chunkSend);
+        ids.push(...(await this.sendPhotos(chatId, chunk, '', chunkSend)));
         continue;
       }
-      await this.call(
+      const msgs = await this.call<{ message_id: number }[]>(
         'sendMediaGroup',
         () => {
           const f = new FormData();
@@ -139,7 +149,9 @@ export class TelegramClient {
         },
         chunkSend,
       );
+      ids.push(...messageIds(msgs));
     }
+    return ids;
   }
 
   /** Long polling: chờ tối đa `timeoutSec` giây. Không tự thử lại (bot tự lùi dần). */
@@ -164,13 +176,13 @@ export class TelegramClient {
     await this.request('setMyCommands', f, { retries: 0 });
   }
 
-  private async call(method: string, body: () => FormData, send: SendOptions): Promise<void> {
-    await this.withRetry(method, () => {
+  private call<T>(method: string, body: () => FormData, send: SendOptions): Promise<T | undefined> {
+    return this.withRetry(method, () => {
       const f = body();
       const thread = send.threadId === undefined ? this.opts.threadId : send.threadId;
       if (thread != null) f.set('message_thread_id', String(thread));
       if (send.replyTo !== undefined) f.set('reply_parameters', JSON.stringify({ message_id: send.replyTo, allow_sending_without_reply: true }));
-      return this.once(method, f);
+      return this.once<T>(method, f);
     });
   }
 

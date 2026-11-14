@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { sortTopDown, type AnalysisRecord, type BookmapUiConfig, type AnalysisResult, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
+import { sortTopDown, type AnalysisRecord, type BookmapUiConfig, type AnalysisResult, type PriceAlert, type ProgressEvent, type RunnerId, type RunnerInfo, type Timeframe } from '@wca/shared';
 import { cancelAnalysis, fetchAnalysis, fetchConfig, fetchHistory, fetchRunners, startAnalysis, subscribeSse } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import { ALL_LAYERS_ON, type LayerKey, type LayerVisibility } from '../overlays/model.ts';
@@ -305,6 +305,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   },
 
   onGlobalEvent: e => {
+    if (e.kind === 'alert') {
+      for (const l of alertListeners) l(e.alert);
+      return;
+    }
     if (e.kind !== 'result' || e.record.status !== 'DONE' || !e.record.result) return;
     const run = get().run;
     if (run && run.id === e.analysisId) return; // đã xử lý qua stream riêng
@@ -315,6 +319,14 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
     }
   },
 }));
+
+const alertListeners = new Set<(a: PriceAlert) => void>();
+
+/** Nghe alert chạm entry đổi trạng thái (từ SSE chung); trả hàm huỷ. */
+export function onAlertEvent(listener: (a: PriceAlert) => void): () => void {
+  alertListeners.add(listener);
+  return () => alertListeners.delete(listener);
+}
 
 /** Dùng order flow Binance khi symbol có collector + tick bật. */
 export function orderflowEnabled(s: Pick<AnalysisState, 'orderflowSymbols' | 'useOrderflow'>, symbol: string): boolean {

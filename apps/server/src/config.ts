@@ -193,6 +193,10 @@ export const config = {
   snapshotWebUrl: (process.env.SNAPSHOT_WEB_URL || 'http://127.0.0.1:5173').replace(/\/+$/, ''),
   /** Channel Playwright: `chrome` = Chrome đã cài; rỗng = Chromium của Playwright. */
   snapshotChromeChannel: process.env.SNAPSHOT_CHROME_CHANNEL === undefined ? 'chrome' : process.env.SNAPSHOT_CHROME_CHANNEL || undefined,
+  /** Canh giá chạm vùng entry của setup (crypto, phân tích mới nhất mỗi symbol); `0` = tắt. */
+  priceAlerts: process.env.PRICE_ALERTS !== '0',
+  /** Hạn alert khi setup không có `validUntil` (giờ). */
+  priceAlertMaxAgeH: Math.max(1, int('PRICE_ALERT_MAX_AGE_H', 72)),
   /** Cache klines trong bộ nhớ (ms) để tránh gọi Binance liên tục. */
   klineMemoryTtlMs: int('KLINE_MEMORY_TTL_MS', 5_000),
 };

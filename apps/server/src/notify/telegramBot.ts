@@ -1,7 +1,7 @@
-import type { AnalysisRecord, ProgressEvent } from '@wca/shared';
+import type { AnalysisRecord, PriceAlert, ProgressEvent } from '@wca/shared';
 import { BOT_COMMANDS, helpText, parseCommand, type BotCommand, type CommandDefaults } from './telegramCommands.ts';
 import type { SendOptions, TgMessage, TgUpdate } from './telegramClient.ts';
-import { escapeHtml } from './telegramFormat.ts';
+import { escapeHtml, fmtPrice, fmtTime } from './telegramFormat.ts';
 import type { Destination, TelegramNotifier } from './telegramNotifier.ts';
 
 // Bot Telegram nhận lệnh trong group (long polling): /analyze chạy phân tích qua AnalysisService, kết quả gửi về chat đã ra lệnh.
@@ -10,7 +10,7 @@ export interface BotApi {
   getUpdates(offset: number | undefined, timeoutSec: number, signal?: AbortSignal): Promise<TgUpdate[]>;
   getMe(signal?: AbortSignal): Promise<{ id: number; username?: string }>;
   setMyCommands(commands: { command: string; description: string }[]): Promise<void>;
-  sendMessage(chatId: string, text: string, send?: SendOptions): Promise<void>;
+  sendMessage(chatId: string, text: string, send?: SendOptions): Promise<unknown>;
 }
 
 /** Phần của AnalysisService bot dùng (giống web: không có đường tắt quyền). */
@@ -26,6 +26,11 @@ export interface BotRepo {
   list(symbol?: string, limit?: number): AnalysisRecord[];
 }
 
+export interface BotAlerts {
+  listArmed(): PriceAlert[];
+  cancelSymbol(symbol: string): Promise<number>;
+}
+
 export interface TelegramBotOptions {
   api: BotApi;
   service: BotService;
@@ -39,6 +44,8 @@ export interface TelegramBotOptions {
   mainChatId: string;
   mainThreadId?: number;
   defaults: CommandDefaults;
+  /** Alert chạm entry (thiếu = tắt lệnh /alerts). */
+  alerts?: BotAlerts;
   maxPendingPerChat: number;
   /** Bỏ lệnh cũ hơn bấy nhiêu giây so với lúc bot khởi động (backlog). */
   maxBacklogSec?: number;
@@ -161,8 +168,8 @@ export class TelegramBot {
     await this.execute(cmd, origin);
   }
 
-  private reply(origin: Origin, text: string): Promise<void> {
-    return this.opts.api.sendMessage(origin.chatId, text, { threadId: origin.threadId, replyTo: origin.replyTo });
+  private async reply(origin: Origin, text: string): Promise<void> {
+    await this.opts.api.sendMessage(origin.chatId, text, { threadId: origin.threadId, replyTo: origin.replyTo });
   }
 
   private async execute(cmd: BotCommand, origin: Origin): Promise<void> {
@@ -179,6 +186,8 @@ export class TelegramBot {
         return this.status(origin);
       case 'cancel':
         return this.cancel(origin);
+      case 'alerts':
+        return this.alerts(cmd.off, origin);
     }
   }
 
@@ -234,6 +243,25 @@ export class TelegramBot {
     const lines = [];
     if (q.running) lines.push(`▶️ Đang chạy: ${this.describe(q.running)}`);
     q.queued.forEach((id, i) => lines.push(`${i + 1}. Chờ: ${this.describe(id)}`));
+    return this.reply(origin, lines.join('\n'));
+  }
+
+  private async alerts(off: string | undefined, origin: Origin): Promise<void> {
+    const { alerts } = this.opts;
+    if (!alerts) return this.reply(origin, 'Alert chạm entry đang tắt (PRICE_ALERTS=0).');
+    if (off) {
+      const n = await alerts.cancelSymbol(off);
+      return this.reply(origin, n ? `🔕 Đã tắt ${n} alert của <b>${escapeHtml(off)}</b>.` : `Không có alert nào đang canh cho ${escapeHtml(off)}.`);
+    }
+    const list = alerts.listArmed();
+    if (!list.length) return this.reply(origin, 'Không có alert chạm entry nào đang canh.');
+    const lines = ['<b>🔔 Alert đang canh</b>'];
+    for (const a of list) {
+      const zone = a.entryLow === a.entryHigh ? fmtPrice(a.entryLow) : `${fmtPrice(a.entryLow)}–${fmtPrice(a.entryHigh)}`;
+      lines.push(
+        `${escapeHtml(a.symbol)} ${['①', '②', '③'][a.setupIndex] ?? `${a.setupIndex + 1}.`} <b>${a.direction}</b> ${a.entryType} · vùng ${zone} · SL ${fmtPrice(a.stopLoss)} · hết hạn ${fmtTime(a.validUntil * 1000)}`,
+      );
+    }
     return this.reply(origin, lines.join('\n'));
   }
 

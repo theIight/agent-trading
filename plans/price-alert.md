@@ -72,3 +72,17 @@ Thêm mục "Alert chạm entry".
 
 ## Approval Status
 Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.
+
+## Ghi chú triển khai
+- **Đã làm theo plan**: `packages/shared/src/alerts.ts` (+ sự kiện SSE `alert` trong `events.ts`), `apps/server/src/alerts/{alertLogic,alertRepo,alertWatcher,priceFeed}.ts`, bảng `price_alerts` + `telegram_messages`, `GET /api/analyses/:id/alerts`, bot `/alerts` + `/alerts off <SYMBOL>`, trạng thái trên thẻ setup của `AnalysisPanel`, `PRICE_ALERTS` / `PRICE_ALERT_MAX_AGE_H`. Test: `tests/priceAlert.test.ts`.
+- **Khác plan / bổ sung**:
+  - Thêm cột `tf` (khung setup, cho dòng tin "SHORT LIMIT 1m") và `arm_price` (giá lúc đặt). Chạy thử với dữ liệu thật phát hiện: setup STOP có SL nằm giữa giá hiện tại và entry (SHORT STOP 612.5, SL 615, giá 617) bị huỷ ngay theo luật 3. Sửa: luật "chạm SL trước entry" chỉ áp dụng khi `armPrice` nằm phía entry của SL (không lấy được giá lúc đặt → áp dụng như cũ).
+  - Giá báo khi chạm theo nến 1m = giá mở nến kẹp vào vùng (ước lượng điểm vào vùng đầu tiên); đường nhanh / lúc đặt = giá thật.
+  - Hết hạn: nến bắt đầu từ `validUntil` không tính; `EXPIRED` khi nến đã phủ tới hạn hoặc quá hạn 10 phút (sàn lỗi).
+  - `TelegramClient.sendMessage` / `sendPhotos` trả `number[]` (`message_id`). Notifier lưu tin đầu (album gốc) vào `telegram_messages`; alert dùng tin lưu đầu tiên (bỏ qua `/last` gửi lại). `thread_id`: NULL = topic mặc định, 0 = không topic. Chưa có tin lưu → `TELEGRAM_CHAT_ID`, không trả lời. Watcher chờ hàng đợi notifier rỗng trước khi gửi để kịp có `message_id` (trường hợp đang trong vùng lúc đặt).
+  - Phát lại `result` của cùng phân tích → không đặt trùng, không thay alert khác.
+  - Watcher chạy cả khi không có Telegram (web vẫn thấy trạng thái).
+- **Đường nhanh**: đã nối. `BookCollector.onTrade()` (hook nhỏ, không đổi config / formatter order flow) → `CollectorPriceFeed` quy về giá chart bằng `BinanceOrderflow.basisFn().current` (cache 1 phút; chưa có basis → bỏ tick). Chỉ symbol có collector (`ORDERFLOW_BINANCE_SYMBOLS`) mới có đường nhanh. Đường nhanh chỉ báo chạm entry, không huỷ theo SL (tránh huỷ sai do basis); đã thấy giá vượt SL qua đường nhanh → nhường nến 1m phân xử.
+- **Kiểm chứng thật** (server tạm cổng 8791, bản sao DB, Telegram tắt): alert BNBUSDT kiểm nến 1m mỗi phút, kiểm bù sau restart, TRIGGERED thật khi giá chạm 617.6; API 404 cho id lạ; ảnh panel bằng Playwright.
+- **Còn lại (follow-up)**: thử Telegram thật (1 tin trả lời vào album) khi restart pm2 — cần bạn đồng ý; chưa test đường nhanh với WebSocket Binance thật (chỉ test đơn vị).
+
