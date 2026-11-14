@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { z } from 'zod';
-import { normalizeSymbol, type ProgressEvent } from '@wca/shared';
+import { normalizeSymbol, type PriceAlert, type ProgressEvent } from '@wca/shared';
 import type { AnalysisRepo } from '../analysis/repo.ts';
 import { ServiceError, type AnalysisService } from '../analysis/service.ts';
 
@@ -36,7 +36,19 @@ function openSse(req: FastifyRequest, reply: FastifyReply, subscribe: (send: (e:
   return send;
 }
 
-export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisService, repo: AnalysisRepo, internalToken: string): void {
+/** Alert chạm entry cho UI (chỉ đọc). */
+export interface AlertsApi {
+  byAnalysis(analysisId: string): PriceAlert[];
+  subscribe(listener: (e: ProgressEvent) => void): () => void;
+}
+
+export function registerAnalysisRoutes(
+  app: FastifyInstance,
+  service: AnalysisService,
+  repo: AnalysisRepo,
+  internalToken: string,
+  alerts?: AlertsApi,
+): void {
   // ---------- API cho UI ----------
   app.post('/api/analyses', async (req, reply) => {
     const parsed = startSchema.safeParse(req.body);
@@ -135,6 +147,13 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
     return rec ?? reply.code(404).send({ error: 'Không tìm thấy' });
   });
 
+  /** Trạng thái alert chạm entry của từng setup (rỗng khi không canh: không phải crypto, tắt, không có setup hợp lệ). */
+  app.get('/api/analyses/:id/alerts', async (req, reply) => {
+    const id = (req.params as { id: string }).id;
+    if (!repo.get(id)) return reply.code(404).send({ error: 'Không tìm thấy' });
+    return alerts?.byAnalysis(id) ?? [];
+  });
+
   app.post('/api/analyses/:id/cancel', async (req, reply) => {
     const ok = service.cancel((req.params as { id: string }).id);
     return ok ? { ok } : reply.code(404).send({ error: 'Không có phân tích đang chạy với id này' });
@@ -151,7 +170,14 @@ export function registerAnalysisRoutes(app: FastifyInstance, service: AnalysisSe
 
   /** SSE chung: kết quả từ mọi nguồn (kể cả Claude Code tương tác). */
   app.get('/api/events', (req, reply) => {
-    openSse(req, reply, s => service.subscribe(e => (e.kind === 'result' || e.kind === 'status' ? s(e) : undefined)));
+    openSse(req, reply, s => {
+      const offService = service.subscribe(e => (e.kind === 'result' || e.kind === 'status' ? s(e) : undefined));
+      const offAlerts = alerts?.subscribe(s);
+      return () => {
+        offService();
+        offAlerts?.();
+      };
+    });
   });
 
   // ---------- API nội bộ cho MCP (chỉ localhost + token) ----------

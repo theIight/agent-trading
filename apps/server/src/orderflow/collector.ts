@@ -105,6 +105,8 @@ export class BookCollector {
   private lastEdgeResyncAt = Number.NEGATIVE_INFINITY;
   /** Lệnh chủ động đang gộp theo giây: key `${giây}:${side}`. */
   private pendingTrades = new Map<string, { t: number; side: 'BUY' | 'SELL'; qty: number; notional: number }>();
+  /** Nghe từng giá khớp (alert chạm entry, đường nhanh). */
+  private readonly tradeListeners = new Set<(price: number, timeMs: number) => void>();
   private readonly fetchImpl: typeof fetch;
   private readonly wsFactory: (url: string) => WebSocket;
   private readonly now: () => number;
@@ -120,6 +122,12 @@ export class BookCollector {
 
   get symbol(): string {
     return this.opts.symbol;
+  }
+
+  /** Đăng ký nghe giá khớp (giá nguồn, chưa trừ basis); trả hàm huỷ. */
+  onTrade(listener: (price: number, timeMs: number) => void): () => void {
+    this.tradeListeners.add(listener);
+    return () => this.tradeListeners.delete(listener);
   }
 
   start(): void {
@@ -259,6 +267,13 @@ export class BookCollector {
       const qty = Number(d.q);
       const price = Number(d.p);
       if (!Number.isFinite(qty) || !Number.isFinite(price)) return;
+      for (const l of this.tradeListeners) {
+        try {
+          l(price, Number(d.T));
+        } catch {
+          /* lỗi của listener không được làm hỏng collector */
+        }
+      }
       const t = Math.floor(Number(d.T) / 1000);
       // Sang giây mới → chốt các giây trước.
       for (const g of this.pendingTrades.values()) if (g.t < t) this.flushTrades(t);

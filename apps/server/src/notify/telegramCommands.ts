@@ -12,6 +12,7 @@ export type BotCommand =
   | { cmd: 'last'; symbol?: string }
   | { cmd: 'status' }
   | { cmd: 'cancel' }
+  | { cmd: 'alerts'; off?: string }
   | { cmd: 'help' }
   | { cmd: 'error'; error: string };
 
@@ -20,6 +21,7 @@ export const BOT_COMMANDS = [
   { command: 'last', description: 'Gửi lại kết quả gần nhất: /last [SYMBOL]' },
   { command: 'status', description: 'Phân tích đang chạy / chờ' },
   { command: 'cancel', description: 'Huỷ phân tích do bot tạo trong chat này' },
+  { command: 'alerts', description: 'Alert chạm entry đang canh: /alerts [off SYMBOL]' },
   { command: 'help', description: 'Danh sách lệnh' },
 ];
 
@@ -34,6 +36,7 @@ export function helpText(d: CommandDefaults): string {
     '/last [SYMBOL] — gửi lại kết quả gần nhất',
     '/status — phân tích đang chạy / chờ',
     '/cancel — huỷ phân tích do bot tạo trong chat này',
+    '/alerts — alert chạm entry đang canh · /alerts off BTCUSDT — tắt alert của symbol',
   ].join('\n');
 }
 
@@ -65,6 +68,12 @@ export function parseCommand(text: string | undefined, botUsername: string | und
       return { cmd: 'status' };
     case 'cancel':
       return { cmd: 'cancel' };
+    case 'alerts': {
+      if (!args.length) return { cmd: 'alerts' };
+      if (args[0]!.toLowerCase() !== 'off') return { cmd: 'error', error: 'Cú pháp: /alerts hoặc /alerts off SYMBOL' };
+      const symbol = args[1] ? normalizeSymbol(args[1]) : '';
+      return symbol ? { cmd: 'alerts', off: symbol } : { cmd: 'error', error: 'Thiếu symbol. Ví dụ: /alerts off BTCUSDT' };
+    }
     case 'help':
     case 'start':
       return { cmd: 'help' };

@@ -1,13 +1,15 @@
 import type { AnalysisRecord, ProgressEvent } from '@wca/shared';
 import type { CaptureFn } from './chartSnapshot.ts';
 import type { Photo, SendOptions } from './telegramClient.ts';
+import type { SentMessage } from './telegramMessages.ts';
 import { escapeHtml, formatCaption, formatFailure, snapshotShots, type FormatOptions } from './telegramFormat.ts';
 
 // Nghe sự kiện `result` của AnalysisService, gửi ảnh chart + tóm tắt vào Telegram. Lỗi chỉ log, không ảnh hưởng phân tích.
 
+/** Hàm gửi trả `message_id` các tin đã gửi (fake trong test có thể không trả). */
 export interface TelegramSender {
-  sendMessage(chatId: string, text: string, send?: SendOptions): Promise<void>;
-  sendPhotos(chatId: string, photos: readonly Photo[], caption: string, send?: SendOptions): Promise<void>;
+  sendMessage(chatId: string, text: string, send?: SendOptions): Promise<number[] | void>;
+  sendPhotos(chatId: string, photos: readonly Photo[], caption: string, send?: SendOptions): Promise<number[] | void>;
 }
 
 /** Nơi gửi kết quả. `requested` = phân tích do lệnh bot tạo (luôn báo FAILED / CANCELED). */
@@ -23,6 +25,8 @@ export interface TelegramNotifierOptions {
   tfs: 'all' | 'primary';
   notifyFailed: boolean;
   format?: FormatOptions;
+  /** Lưu `message_id` tin kết quả (DONE) để alert chạm entry trả lời vào album. */
+  messages?: { save(analysisId: string, msg: SentMessage): void };
   log?: (msg: string) => void;
 }
 
@@ -80,6 +84,16 @@ export class TelegramNotifier {
     (this.opts.log ?? console.log)(msg);
   }
 
+  private remember(rec: AnalysisRecord, dest: Destination, ids: number[] | void): void {
+    const messageId = ids?.[0];
+    if (messageId === undefined || !this.opts.messages) return;
+    try {
+      this.opts.messages.save(rec.id, { chatId: dest.chatId, ...(dest.threadId !== undefined ? { threadId: dest.threadId } : {}), messageId });
+    } catch (err) {
+      this.log(`[telegram] ${rec.id}: không lưu được message_id: ${(err as Error).message}`);
+    }
+  }
+
   private async send(rec: AnalysisRecord, dest: Destination): Promise<void> {
     const { sender } = this.opts;
     const { chatId } = dest;
@@ -102,10 +116,10 @@ export class TelegramNotifier {
       photos = images.map((data, i) => ({ data, filename: `${rec.symbol}-${shots[i]!.tf}.png` }));
     } catch (err) {
       this.log(`[telegram] ${rec.id}: chụp chart lỗi, chỉ gửi chữ: ${(err as Error).message}`);
-      await sender.sendMessage(chatId, `${caption}\n\n<i>(Không chụp được chart)</i>`, send);
+      this.remember(rec, dest, await sender.sendMessage(chatId, `${caption}\n\n<i>(Không chụp được chart)</i>`, send));
       return;
     }
-    await sender.sendPhotos(chatId, photos, caption, send);
+    this.remember(rec, dest, await sender.sendPhotos(chatId, photos, caption, send));
     this.log(`[telegram] đã gửi ${rec.symbol} ${rec.primaryTf} (${photos.length} ảnh)`);
   }
 }

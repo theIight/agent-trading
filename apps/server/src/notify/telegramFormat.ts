@@ -11,7 +11,7 @@ export function escapeHtml(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
-const fmtPrice = (p: number) => p.toLocaleString('en-US', { maximumFractionDigits: p >= 1000 ? 1 : p >= 1 ? 3 : 6 });
+export const fmtPrice = (p: number) => p.toLocaleString('en-US', { maximumFractionDigits: p >= 1000 ? 1 : p >= 1 ? 3 : 6 });
 
 const DECISIONS: Record<string, string> = { ENTER: 'Vào lệnh', WAIT_FOR_SETUP: 'Chờ setup', STAND_ASIDE: 'Đứng ngoài' };
 const SCHEMATICS: Record<string, string> = {
@@ -22,7 +22,7 @@ const SCHEMATICS: Record<string, string> = {
 };
 
 /** "12:34 14/11" theo múi giờ (không phụ thuộc định dạng locale của Node). */
-function fmtTime(ms: number, timeZone?: string): string {
+export function fmtTime(ms: number, timeZone?: string): string {
   const parts = new Intl.DateTimeFormat('en-GB', { hour: '2-digit', minute: '2-digit', day: '2-digit', month: '2-digit', hourCycle: 'h23', timeZone }).formatToParts(new Date(ms));
   const get = (type: string) => parts.find(p => p.type === type)?.value ?? '';
   return `${get('hour')}:${get('minute')} ${get('day')}/${get('month')}`;
