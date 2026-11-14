@@ -12,7 +12,7 @@ import type {
   Time,
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
-import { EMPTY_MODEL, layoutLabels, type LabelBox, type OverlayModel } from './model.ts';
+import { EMPTY_MODEL, layoutLabels, overlayPriceRange, type LabelBox, type OverlayModel } from './model.ts';
 import { display, font } from '../chart/displaySettings.ts';
 import { wallStyle } from './orderflowStyle.ts';
 
@@ -295,27 +295,7 @@ export class OverlayPrimitive implements ISeriesPrimitive<Time> {
 
   /** Mở rộng thang giá để thấy TP/SL và đường dự đoán nằm trong vùng đang xem. */
   autoscaleInfo(start: Logical, end: Logical): AutoscaleInfo | null {
-    let min = Infinity;
-    let max = -Infinity;
-    const inView = (t: number) => {
-      const l = this.mapTime(t);
-      return l !== null && l >= start - 1 && l <= end + 1;
-    };
-    for (const r of this.model.rects) {
-      if (r.noAutoscale) continue; // trading range không ép thang giá
-      if (inView(r.t1) || inView(r.t2)) {
-        min = Math.min(min, r.bottom);
-        max = Math.max(max, r.top);
-      }
-    }
-    for (const line of this.model.lines) {
-      for (const p of line.points) {
-        if (inView(p.time)) {
-          min = Math.min(min, p.price);
-          max = Math.max(max, p.price);
-        }
-      }
-    }
-    return Number.isFinite(min) ? { priceRange: { minValue: min, maxValue: max } } : null;
+    const r = overlayPriceRange(this.model, this.mapTime, start, end);
+    return r ? { priceRange: { minValue: r.min, maxValue: r.max } } : null;
   }
 }

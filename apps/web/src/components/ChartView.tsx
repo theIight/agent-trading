@@ -41,9 +41,11 @@ const DEMO_VARIANT: DemoVariant = DEMO_PARAM === 'enter' || DEMO_PARAM === 'asid
 interface Props {
   onStatus: (s: string) => void;
   onReady?: (controller: ChartController | null) => void;
+  /** Chế độ ảnh chụp: bố cục cố định (nến 60% trái, setup 50% phải). */
+  snapshot?: boolean;
 }
 
-export function ChartView({ onStatus, onReady }: Props) {
+export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const controllerRef = useRef<ChartController | null>(null);
   const overlayRef = useRef<OverlayManager | null>(null);
@@ -93,7 +95,7 @@ export function ChartView({ onStatus, onReady }: Props) {
       },
     });
     controllerRef.current = ctrl;
-    overlayRef.current = new OverlayManager(ctrl);
+    overlayRef.current = new OverlayManager(ctrl, { snapshot });
     onReady?.(ctrl);
     return () => {
       onReady?.(null);

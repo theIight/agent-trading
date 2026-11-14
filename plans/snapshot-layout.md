@@ -33,3 +33,12 @@ Nguyên nhân (`OverlayManager.render`): `rightOffset = max(12, model.futureBars
 
 ## Approval Status
 Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.
+
+## Ghi chú triển khai
+- `snapshotMode.ts`: `snapshotRange(lastIndex)` → `{from: last + 0.5 − 120, to: from + 200}`; `toolStartIndex` → nến có mép trái tại mốc 50% (= `last − 19`).
+- `model.ts`: option `toolStartTime` (t1 = max(asOf, mốc 50%)) và thêm `toolEndTime` (t2 = mép phải thay cho `validUntil`, để nhiều setup chia cột trong nửa phải thay vì cột thứ 2 nằm ngoài khung) — lệch nhỏ so với thiết kế (plan chỉ nêu `toolStartTime`). `webRightOffset(futureBars, visibleBars)` = min(max(12, futureBars + 6), 40% số nến đang nhìn). `overlayPriceRange` (dùng trong `OverlayPrimitive.autoscaleInfo`): hộp tính khi giao khung nhìn (trước đây chỉ khi một đầu nằm trong khung), điểm đường chỉ tính khi trong khung.
+- `OverlayManager({ snapshot })`: snapshot → tính mốc tool + `setVisibleLogicalRange(snapshotRange)` mỗi lần render; web → `webRightOffset`. `SnapshotApp` đặt lại khung nhìn sau `scrollToRealTime` của lần tải rồi mới `ready`.
+- Lưu ý: `asOf` của phân tích mới ≈ nến đã đóng gần nhất, nên ảnh gửi ngay khi phân tích xong sẽ có hộp setup bắt đầu ở ~mốc 60% (giữ `asOf` theo spec); chỉ khi chụp muộn (asOf trôi về trái) hộp mới bắt đầu đúng mốc 50%.
+- Trước / sau (phân tích `c4fcccd2…`, BTCUSDT 1m, setup `validUntil` +6h):
+  - Trước (web 5173): ảnh 1m toàn vùng tương lai, không thấy nến (chỉ một mẩu nến ở mép trái), thang giá bị đường dự đoán kéo tới 67.8k–64.4k; web mở phân tích cũng không thấy nến. Ảnh 4h/1h/1d vốn thấy nến (setup ẩn ở khung lớn), nến kín tới mép phải.
+  - Sau (vite 5175): ảnh 1m thấy 120 nến 1m ở 60% trái, hộp 2 setup ở nửa phải (cột 1 từ mốc 50%, cột 2 tới mép phải), đường dự đoán bị cắt ở mép phải; 1h/4h/1d: nến 60% trái + dự đoán ở 40% phải. Web mở phân tích: nến hiện rõ, khoảng trống tương lai ≤ 40% khung.
