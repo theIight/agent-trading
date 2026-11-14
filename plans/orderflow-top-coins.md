@@ -36,4 +36,4 @@ Order flow Binance (collector sổ lệnh + aggTrade, tường, CVD, lệnh lớ
 - Thủ công: chọn SOLUSDT trên web → có tường order flow / heatmap sổ lệnh; phân tích SOLUSDT với order flow Binance → agent nhận snapshot (`get_orderflow`) đúng giá.
 
 ## Approval Status
-Chờ duyệt.
+Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.

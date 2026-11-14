@@ -29,4 +29,4 @@ Heatmap sổ lệnh vẽ quá nhiều ô (lệnh nhỏ), khó nhìn. Hiện ch�
 - Thủ công: BTC đặt "≥ 5" → chỉ còn các dải ≥ 5 BTC, đổi sang XAUUSD giữ ngưỡng riêng của vàng.
 
 ## Approval Status
-Chờ duyệt.
+Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.

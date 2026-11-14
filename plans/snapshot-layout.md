@@ -32,4 +32,4 @@ Nguyên nhân (`OverlayManager.render`): `rightOffset = max(12, model.futureBars
 - Ảnh: khung chính thấy rõ nến 60% bên trái, hộp setup ở nửa phải; khung lớn (không có setup) thấy nến 60% + đường dự đoán ở 40% phải.
 
 ## Approval Status
-Chờ duyệt.
+Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.

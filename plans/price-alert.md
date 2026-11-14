@@ -71,4 +71,4 @@ Thêm mục "Alert chạm entry".
 - Lúc đặt mà giá đã trong vùng → **báo ngay**.
 
 ## Approval Status
-Chờ duyệt.
+Đã duyệt (2026-11-14, "hãy xử lý 4 plan đấy"). Nhánh `feat/alerts-orderflow-layout`.
