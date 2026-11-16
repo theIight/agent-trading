@@ -21,6 +21,7 @@ import { countdownLabel, updateSkew } from './countdown.ts';
 import { CountdownPrimitive } from './CountdownPrimitive.ts';
 import { SpikeLabelPrimitive } from './SpikeLabelPrimitive.ts';
 import { buildVolumeView } from './volumeView.ts';
+import { formatPriceForCopy, pricePrecision } from './copyPrice.ts';
 import { display } from './displaySettings.ts';
 import { THEMES, type ThemeName } from './theme.ts';
 
@@ -336,14 +337,35 @@ export class ChartController {
     }
   }
 
-  /** Số chữ số thập phân theo độ lớn giá (BTC ≈ 0.1, altcoin nhỏ hơn). */
   /** Số lẻ cố định theo instrument (vàng/forex: 2), null = tự tính theo độ lớn giá. */
   private fixedPrecision: number | null = null;
+  /** Số lẻ đang hiển thị trên trục giá. */
+  private precision = 2;
 
   private applyPriceFormat(): void {
-    const ref = this.candles.at(-1)?.close ?? 0;
-    const precision = this.fixedPrecision ?? (ref >= 1000 ? 1 : ref >= 10 ? 2 : ref >= 1 ? 4 : ref >= 0.01 ? 5 : 7);
+    const precision = pricePrecision(this.candles.at(-1)?.close ?? 0, this.fixedPrecision);
+    this.precision = precision;
     this.candleSeries.applyOptions({ priceFormat: { type: 'price', precision, minMove: 10 ** -precision } });
+  }
+
+  /**
+   * Giá tại toạ độ (px, tính từ góc trái-trên container) cho menu chuột phải:
+   * giá ở Y con trỏ + giá đóng của nến dưới con trỏ (nếu có). Ngoài vùng giá (trục thời gian) → null.
+   */
+  priceAt(x: number, y: number): { price: string; close: string | null } | null {
+    if (!this.candles.length) return null;
+    const pane = this.chart.paneSize(0);
+    if (y < 0 || y > pane.height) return null;
+    const price = this.candleSeries.coordinateToPrice(y);
+    if (price === null) return null;
+    let close: string | null = null;
+    if (x >= 0 && x <= pane.width) {
+      const time = this.chart.timeScale().coordinateToTime(x);
+      const idx = time === null ? -1 : this.indexAtOrBefore(time as number);
+      const candle = idx >= 0 ? this.candles[idx] : undefined;
+      if (candle && candle.time === time) close = formatPriceForCopy(candle.close, this.precision);
+    }
+    return { price: formatPriceForCopy(price, this.precision), close };
   }
 
   private resetPriceScale(): void {

@@ -38,11 +38,37 @@ export interface Wall {
 const r2 = (x: number) => Math.round(x * 100) / 100;
 const r3 = (x: number) => Math.round(x * 1000) / 1000;
 
-function median(xs: number[]): number {
-  if (!xs.length) return 0;
-  const s = [...xs].sort((a, b) => a - b);
-  const m = s.length >> 1;
-  return s.length % 2 ? s[m]! : (s[m - 1]! + s[m]!) / 2;
+/** Trung vị bằng quickselect (O(n), không sort cả mảng). */
+export function median(xs: readonly number[]): number {
+  const n = xs.length;
+  if (!n) return 0;
+  const a = Float64Array.from(xs);
+  const m = n >> 1;
+  let lo = 0;
+  let hi = n - 1;
+  while (lo < hi) {
+    const pivot = a[(lo + hi) >> 1]!;
+    let i = lo;
+    let j = hi;
+    while (i <= j) {
+      while (a[i]! < pivot) i++;
+      while (a[j]! > pivot) j--;
+      if (i <= j) {
+        const t = a[i]!;
+        a[i] = a[j]!;
+        a[j] = t;
+        i++;
+        j--;
+      }
+    }
+    if (m <= j) hi = j;
+    else if (m >= i) lo = i;
+    else break;
+  }
+  if (n % 2) return a[m]!;
+  let below = -Infinity;
+  for (let i = 0; i < m; i++) if (a[i]! > below) below = a[i]!;
+  return (below + a[m]!) / 2;
 }
 
 export interface WallOptions {
@@ -445,49 +471,118 @@ interface OpenWall {
   misses: number;
 }
 
+/** Tường đã mất nhưng nến 1m chưa phủ hết khoảng [lần cuối còn thấy, lần đầu hụt] → chưa chốt consumed/pulled. */
+interface PendingWall {
+  wall: OpenWall;
+  mids: number[];
+}
+
+/** Chốt tường chờ dù nến chưa tới (nguồn nến lỗi) sau số giây này, để danh sách không phình mãi. */
+const PENDING_MAX_SEC = 3600;
+
+/** Vị trí nến đầu tiên có `time + 60 > from` (nến đã sort theo time). */
+function firstCandleAfter(candles: readonly SpotCandle[], from: number): number {
+  let lo = 0;
+  let hi = candles.length;
+  while (lo < hi) {
+    const mid = (lo + hi) >> 1;
+    if (candles[mid]!.time + 60 <= from) lo = mid + 1;
+    else hi = mid;
+  }
+  return lo;
+}
+
 /**
- * Lịch sử tường từ các mẫu sổ lệnh: mỗi tường là một đoạn [start, end]. Khi tường biến mất (hoặc còn < persistRatio × đỉnh),
- * giá chạm bucket trong khoảng [lần cuối còn thấy, lần đầu hụt] → `consumed` (end = nến 1m chạm đầu tiên), không chạm → `pulled`.
+ * Lịch sử tường tính tăng dần: giữ trạng thái giữa các lần gọi, mỗi lần `push` chỉ xử lý mẫu mới (t > mẫu cuối đã xử lý).
+ * Kết quả (với `segments(-Infinity)`) giống hệt khi tính lại từ đầu trên toàn bộ mẫu: tường đã mất chỉ được chốt
+ * consumed/pulled khi nến 1m đã phủ tới lần đầu hụt (trước đó tính tạm bằng nến hiện có).
+ * `candles` phải sort tăng dần theo `time`.
  */
-export function findWallSegments(samples: readonly BookSample[], candles: readonly SpotCandle[], opts: WallSegmentOptions): WallSegment[] {
-  const { bucket, minSize, k = 3, persistRatio = 0.5, gapTolerance = 1, minDurationMin = 5, maxGapSec = 300 } = opts;
-  const open = new Map<string, OpenWall>();
-  const out: WallSegment[] = [];
-  const sorted = [...samples].sort((a, b) => a.t - b.t);
-  const latest = sorted.at(-1);
+export class WallTracker {
+  private readonly bucket: number;
+  private readonly minSize: number;
+  private readonly k: number;
+  private readonly persistRatio: number;
+  private readonly gapTolerance: number;
+  private readonly minDurSec: number;
+  private readonly maxGapSec: number;
+  private readonly open = new Map<string, OpenWall>();
+  private pending: PendingWall[] = [];
+  private closed: WallSegment[] = [];
+  private prevT: number | null = null;
+  private prevMid: number | null = null;
+  private candles: readonly SpotCandle[] = [];
+  /** Số mẫu đã xử lý (để test/đo). */
+  processed = 0;
 
-  const touched = (w: OpenWall, from: number, to: number, mids: number[]): number | null => {
-    const hit = (lo: number, hi: number) => (w.side === 'BID' ? lo <= w.price + bucket : hi >= w.price);
-    for (const c of candles) {
-      if (c.time + 60 <= from || c.time > to) continue;
-      if (hit(c.low, c.high)) return Math.max(from, c.time);
-    }
-    return mids.some(m => hit(m, m)) ? to : null;
-  };
-  const close = (w: OpenWall, mids: number[]) => {
-    const to = w.firstMiss ?? w.lastSeen;
-    const at = touched(w, w.lastSeen, to, mids);
-    const end = at ?? w.lastSeen;
-    if (end - w.start >= minDurationMin * 60) {
-      out.push({ side: w.side, sourcePrice: w.price, start: w.start, end, peakSize: r3(w.peak), status: at !== null ? 'consumed' : 'pulled' });
-    }
-  };
+  constructor(opts: WallSegmentOptions) {
+    this.bucket = opts.bucket;
+    this.minSize = opts.minSize;
+    this.k = opts.k ?? 3;
+    this.persistRatio = opts.persistRatio ?? 0.5;
+    this.gapTolerance = opts.gapTolerance ?? 1;
+    this.minDurSec = (opts.minDurationMin ?? 5) * 60;
+    this.maxGapSec = opts.maxGapSec ?? 300;
+  }
 
-  let prevT: number | null = null;
-  let prevMid: number | null = null;
-  for (const s of sorted) {
-    if (prevT !== null && s.t - prevT > maxGapSec) {
-      for (const w of open.values()) close(w, prevMid !== null ? [prevMid] : []);
-      open.clear();
+  /** Thời điểm mẫu cuối đã xử lý (null = chưa có). */
+  get latestT(): number | null {
+    return this.prevT;
+  }
+
+  /** Xử lý các mẫu mới (bỏ mẫu có t ≤ mẫu cuối đã xử lý) và chốt các tường chờ đã đủ nến. */
+  push(samples: readonly BookSample[], candles: readonly SpotCandle[]): void {
+    this.candles = candles;
+    for (const s of samples) {
+      if (this.prevT !== null && s.t <= this.prevT) continue;
+      this.step(s);
+    }
+    this.resolvePending(false);
+  }
+
+  /**
+   * Tường còn tồn tại + tường đã kết thúc có `end ≥ from`; `start` cắt về `from`. Xoá hẳn tường đã kết thúc trước `from`.
+   */
+  segments(from = -Infinity): WallSegment[] {
+    this.closed = this.closed.filter(sg => sg.end! >= from);
+    const out: WallSegment[] = [];
+    const keep = (sg: WallSegment) => {
+      if (sg.end !== null && sg.end < from) return;
+      const start = Math.max(sg.start, from);
+      if (sg.end !== null && sg.end - start < this.minDurSec) return;
+      out.push(start === sg.start ? sg : { ...sg, start });
+    };
+    for (const sg of this.closed) keep(sg);
+    for (const p of this.pending) {
+      const sg = this.finish(p);
+      if (sg) keep(sg);
+    }
+    const latest = this.prevT;
+    if (latest !== null) {
+      for (const w of this.open.values()) {
+        // Hụt trong ngưỡng nhiễu ở mẫu cuối → vẫn coi là còn tồn tại.
+        if (latest - Math.max(w.start, from) >= this.minDurSec) {
+          keep({ side: w.side, sourcePrice: w.price, start: w.start, end: null, peakSize: r3(w.peak), status: 'active' });
+        }
+      }
+    }
+    // Cùng start: tường kết thúc trước đứng trước (còn tồn tại cuối), rồi theo phía/giá cho thứ tự ổn định.
+    return out.sort((a, b) => a.start - b.start || (a.end ?? Infinity) - (b.end ?? Infinity) || a.side.localeCompare(b.side) || a.sourcePrice - b.sourcePrice);
+  }
+
+  private step(s: BookSample): void {
+    if (this.prevT !== null && s.t - this.prevT > this.maxGapSec) {
+      for (const w of this.open.values()) this.close(w, this.prevMid !== null ? [this.prevMid] : []);
+      this.open.clear();
     }
     for (const side of ['BID', 'ASK'] as const) {
       const levels = side === 'BID' ? s.bids : s.asks;
-      const sizes = new Map(levels);
-      const th = Math.max(k * median(levels.map(l => l[1])), minSize);
-      for (const [key, w] of open) {
+      let sizes: Map<number, number> | null = null;
+      for (const [key, w] of this.open) {
         if (w.side !== side) continue;
+        sizes ??= new Map(levels);
         const q = sizes.get(w.price) ?? 0;
-        if (q >= persistRatio * w.peak && q > 0) {
+        if (q >= this.persistRatio * w.peak && q > 0) {
           w.lastSeen = s.t;
           w.peak = Math.max(w.peak, q);
           w.misses = 0;
@@ -495,27 +590,76 @@ export function findWallSegments(samples: readonly BookSample[], candles: readon
         } else {
           w.misses += 1;
           w.firstMiss ??= s.t;
-          if (w.misses > gapTolerance) {
-            close(w, [s.mid, ...(prevMid !== null ? [prevMid] : [])]);
-            open.delete(key);
+          if (w.misses > this.gapTolerance) {
+            this.close(w, [s.mid, ...(this.prevMid !== null ? [this.prevMid] : [])]);
+            this.open.delete(key);
           }
         }
       }
+      const th = Math.max(this.k * median(levels.map(l => l[1])), this.minSize);
       for (const [price, q] of levels) {
+        if (q < th) continue;
         const key = `${side}:${price}`;
-        if (q >= th && !open.has(key)) open.set(key, { side, price, start: s.t, lastSeen: s.t, firstMiss: null, peak: q, misses: 0 });
+        if (!this.open.has(key)) this.open.set(key, { side, price, start: s.t, lastSeen: s.t, firstMiss: null, peak: q, misses: 0 });
       }
     }
-    prevT = s.t;
-    prevMid = s.mid;
+    this.prevT = s.t;
+    this.prevMid = s.mid;
+    this.processed++;
   }
-  for (const w of open.values()) {
-    // Hụt trong ngưỡng nhiễu ở mẫu cuối → vẫn coi là còn tồn tại.
-    if (latest && latest.t - w.start >= minDurationMin * 60) {
-      out.push({ side: w.side, sourcePrice: w.price, start: w.start, end: null, peakSize: r3(w.peak), status: 'active' });
+
+  private close(w: OpenWall, mids: number[]): void {
+    this.pending.push({ wall: w, mids });
+  }
+
+  /** Chốt tường chờ khi nến đã phủ tới lần đầu hụt (hoặc chờ quá lâu). */
+  private resolvePending(force: boolean): void {
+    if (!this.pending.length) return;
+    const last = this.candles.at(-1);
+    const coveredTo = last ? last.time + 60 : -Infinity;
+    const rest: PendingWall[] = [];
+    for (const p of this.pending) {
+      const to = p.wall.firstMiss ?? p.wall.lastSeen;
+      if (force || coveredTo > to || (this.prevT !== null && this.prevT - to > PENDING_MAX_SEC)) {
+        const sg = this.finish(p);
+        if (sg) this.closed.push(sg);
+      } else {
+        rest.push(p);
+      }
     }
+    this.pending = rest;
   }
-  return out.sort((a, b) => a.start - b.start);
+
+  /** consumed/pulled theo nến 1m (hoặc mid) trong [lần cuối còn thấy, lần đầu hụt]; bỏ tường quá ngắn. */
+  private finish({ wall: w, mids }: PendingWall): WallSegment | null {
+    const from = w.lastSeen;
+    const to = w.firstMiss ?? w.lastSeen;
+    const hit = (lo: number, hi: number) => (w.side === 'BID' ? lo <= w.price + this.bucket : hi >= w.price);
+    let at: number | null = null;
+    for (let i = firstCandleAfter(this.candles, from); i < this.candles.length; i++) {
+      const c = this.candles[i]!;
+      if (c.time > to) break;
+      if (hit(c.low, c.high)) {
+        at = Math.max(from, c.time);
+        break;
+      }
+    }
+    if (at === null && mids.some(m => hit(m, m))) at = to;
+    const end = at ?? w.lastSeen;
+    if (end - w.start < this.minDurSec) return null;
+    return { side: w.side, sourcePrice: w.price, start: w.start, end, peakSize: r3(w.peak), status: at !== null ? 'consumed' : 'pulled' };
+  }
+}
+
+/**
+ * Lịch sử tường từ các mẫu sổ lệnh: mỗi tường là một đoạn [start, end]. Khi tường biến mất (hoặc còn < persistRatio × đỉnh),
+ * giá chạm bucket trong khoảng [lần cuối còn thấy, lần đầu hụt] → `consumed` (end = nến 1m chạm đầu tiên), không chạm → `pulled`.
+ * Tính một lần trên toàn bộ mẫu; bản tăng dần dùng `WallTracker`.
+ */
+export function findWallSegments(samples: readonly BookSample[], candles: readonly SpotCandle[], opts: WallSegmentOptions): WallSegment[] {
+  const tracker = new WallTracker(opts);
+  tracker.push([...samples].sort((a, b) => a.t - b.t), [...candles].sort((a, b) => a.time - b.time));
+  return tracker.segments();
 }
 
 /** Chênh lệch `close spot − close futures` theo phút (unix giây của nến), chỉ các phút có cả hai. */

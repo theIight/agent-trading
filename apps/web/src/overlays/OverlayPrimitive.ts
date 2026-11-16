@@ -27,7 +27,7 @@ interface Ctx {
 }
 
 /** Chữ sáng → nền tối. Không đọc được màu → coi như nền tối. */
-function isLightText(color: string): boolean {
+export function isLightText(color: string): boolean {
   const hex = /^#([0-9a-f]{6})$/i.exec(color);
   if (!hex) return true;
   const n = parseInt(hex[1]!, 16);

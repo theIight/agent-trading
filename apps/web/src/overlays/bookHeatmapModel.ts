@@ -144,3 +144,80 @@ export function bookHeatColor(intensity: number, opacity = 1): string {
   const alpha = Math.min(1, (0.1 + 0.55 * x) * opacity);
   return `rgba(${ch(0)},${ch(1)},${ch(2)},${alpha.toFixed(3)})`;
 }
+
+/** Dải thanh khoản: cùng bucket nguồn `ix` có ô hiển thị qua các cột liên tiếp (cho phép hụt `maxGap` cột). */
+export interface HeatBand {
+  ix: number;
+  /** Chỉ số cột đầu / cuối của dải. */
+  start: number;
+  end: number;
+  /** Khối lượng ô lớn nhất trong dải và cột chứa nó. */
+  peak: number;
+  peakCol: number;
+  /** Giá chart tâm bucket tại cột đặt nhãn (= max(start, view.c0)). */
+  price: number;
+}
+
+/**
+ * Dải thanh khoản có phần nằm trong vùng nhìn (`view`), ô ≥ `min`, dài ≥ `minCols` cột, sắp theo `peak` giảm dần.
+ * Quét từ cột 0 để biết dải bắt đầu trước vùng nhìn (nhãn khi đó đặt ở cột `view.c0`).
+ */
+export function heatBands(h: BookHeatmap, view: HeatView, min: number, minCols = 1, maxGap = 1): HeatBand[] {
+  const open = new Map<number, { start: number; last: number; peak: number; peakCol: number }>();
+  const done: { ix: number; start: number; end: number; peak: number; peakCol: number }[] = [];
+  const close = (ix: number) => {
+    const r = open.get(ix)!;
+    done.push({ ix, start: r.start, end: r.last, peak: r.peak, peakCol: r.peakCol });
+    open.delete(ix);
+  };
+  const c1 = Math.min(h.data.length - 1, view.c1);
+  for (let ci = 0; ci <= c1; ci++) {
+    const flat = h.data[ci] ?? [];
+    for (let i = 0; i + 1 < flat.length; i += 2) {
+      const q = flat[i + 1]!;
+      if (!(q >= min) || !(q > 0)) continue;
+      const ix = flat[i]!;
+      const r = open.get(ix);
+      if (r) {
+        r.last = ci;
+        if (q > r.peak) {
+          r.peak = q;
+          r.peakCol = ci;
+        }
+      } else open.set(ix, { start: ci, last: ci, peak: q, peakCol: ci });
+    }
+    for (const [ix, r] of open) if (ci - r.last > maxGap) close(ix);
+  }
+  for (const ix of [...open.keys()]) close(ix);
+  const out: HeatBand[] = [];
+  for (const b of done) {
+    if (b.end < view.c0 || b.end - b.start + 1 < minCols) continue;
+    const col = Math.max(b.start, view.c0);
+    const price = b.ix * h.bucket - (h.shift[col] ?? 0) + h.bucket / 2;
+    if (price < view.low || price > view.high) continue;
+    out.push({ ...b, price });
+  }
+  return out.sort((a, b) => b.peak - a.peak);
+}
+
+export interface LabelBox {
+  /** Mép trái, tâm dọc, rộng, cao (px). */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** Chọn tham lam theo thứ tự `items` (ưu tiên giảm dần), tối đa `n` nhãn không chồng khung; trả chỉ số đã chọn. */
+export function pickHeatLabels(items: readonly LabelBox[], n: number): number[] {
+  const picked: number[] = [];
+  for (let i = 0; i < items.length && picked.length < n; i++) {
+    const a = items[i]!;
+    const hit = picked.some(j => {
+      const b = items[j]!;
+      return a.x < b.x + b.w && b.x < a.x + a.w && Math.abs(a.y - b.y) < (a.h + b.h) / 2;
+    });
+    if (!hit) picked.push(i);
+  }
+  return picked;
+}

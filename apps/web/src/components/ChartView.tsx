@@ -12,6 +12,7 @@ import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
+import { ChartContextMenu } from './ChartContextMenu.tsx';
 import { aggCoverageFrom } from '../chart/volumeView.ts';
 
 function fmt(n: number): string {
@@ -209,6 +210,7 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
         )}
       </div>
       <LayerToggles />
+      {!snapshot && <ChartContextMenu containerRef={containerRef} controllerRef={controllerRef} resetKey={`${symbol}|${tf}`} />}
       {liveOfSymbol && layers.orderflow && (liveOfError || (liveOf && (!liveOf.connected || liveOf.historyMin < 30))) && (
         <div className={`of-chart-status ${liveOfError || !liveOf?.connected ? 'down' : 'muted'}`}>
           Order flow:{' '}

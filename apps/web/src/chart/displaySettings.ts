@@ -22,6 +22,8 @@ export interface DisplaySettings {
    * của sổ lệnh nguồn: BTC, oz…). Thiếu / 0 = tắt. Dùng chung với `bookHeatHidePct` (lấy ngưỡng lớn hơn).
    */
   bookHeatMinQty: Record<string, number>;
+  /** Heatmap sổ lệnh: số nhãn khối lượng tối đa ở điểm bắt đầu dải thanh khoản (0 = tắt). */
+  bookHeatLabels: number;
   /** Bong bóng thanh lý: chỉ hiện cụm ≥ hệ số này × ngưỡng server. */
   bubbleMinX: number;
   /** Hệ số độ dày vạch tường order flow. */
@@ -54,6 +56,7 @@ export const DEFAULT_DISPLAY: DisplaySettings = {
   bookHeatOpacity: 1,
   bookHeatHidePct: 20,
   bookHeatMinQty: {},
+  bookHeatLabels: 12,
   bubbleMinX: 1,
   ofWidthX: 1.5,
   ofOpacity: 1,
@@ -75,6 +78,7 @@ export const DISPLAY_RANGES: Record<NumKey, { min: number; max: number; step: nu
   heatmapOpacity: { min: 0.2, max: 1.5, step: 0.1, label: 'Độ đậm heatmap thanh lý', unit: '×' },
   bookHeatOpacity: { min: 0.2, max: 1.5, step: 0.1, label: 'Độ đậm heatmap sổ lệnh', unit: '×' },
   bookHeatHidePct: { min: 0, max: 95, step: 5, label: 'Heatmap sổ lệnh: ẩn ô nhỏ dưới phân vị', unit: '%' },
+  bookHeatLabels: { min: 0, max: 30, step: 1, label: 'Heatmap sổ lệnh: số nhãn khối lượng', unit: '' },
   bubbleMinX: { min: 1, max: 5, step: 0.5, label: 'Bong bóng thanh lý: chỉ hiện cụm ≥', unit: '× ngưỡng' },
 };
 

@@ -2,6 +2,7 @@ import { roundPrice } from '@wca/shared';
 import type { Db } from '../db/index.ts';
 import { LocalBook, applyDiffsToLevels, nearCoverEdge, sampleBook, type BookLevels, type BookMarket, type BookSample, type DepthDiff, type DepthSnapshot } from './localBook.ts';
 import type { BigTrade } from './calc.ts';
+import { watchSocket, type SocketWatch } from '../ws/watchSocket.ts';
 
 // Collector sổ lệnh + lệnh khớp lớn của Binance spot / USDⓈ-M futures (WebSocket công khai, không cần key).
 // Mỗi `sampleSec` giây gom sổ lệnh theo bucket và ghi SQLite để có "heatmap" (tường đứng bao lâu) qua các lần restart.
@@ -11,6 +12,11 @@ export const BINANCE_SPOT_WS = 'wss://stream.binance.com:9443';
 export const BINANCE_FUTURES_REST = 'https://fapi.binance.com';
 /** Futures tách WebSocket: sổ lệnh ở `/public`, lệnh khớp ở `/market` (đường cũ `/stream` không gửi aggTrade). */
 export const BINANCE_FUTURES_WS = 'wss://fstream.binance.com';
+
+/** Chưa mở được sau khoảng này → bỏ socket, kết nối lại. */
+export const WS_OPEN_TIMEOUT_MS = 20_000;
+/** Đã mở mà không có message trong khoảng này → coi là treo, kết nối lại (depth@100ms / aggTrade luôn có dữ liệu). */
+export const WS_IDLE_TIMEOUT_MS = 60_000;
 
 export interface StreamEndpoint {
   url: string;
@@ -97,6 +103,7 @@ export class BookCollector {
   private readonly sourceSymbol: string;
   /** Socket đang mở theo URL. */
   private sockets = new Map<string, WebSocket>();
+  private watches = new Map<string, SocketWatch>();
   private reconnectTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private reconnectDelays = new Map<string, number>();
   private buffer: DepthDiff[] = [];
@@ -149,6 +156,8 @@ export class BookCollector {
     this.timers = [];
     for (const t of this.reconnectTimers.values()) clearTimeout(t);
     this.reconnectTimers.clear();
+    for (const w of this.watches.values()) w.dispose();
+    this.watches.clear();
     const sockets = [...this.sockets.values()];
     this.sockets.clear();
     for (const ws of sockets) ws.close();
@@ -210,27 +219,36 @@ export class BookCollector {
       this.buffer = [];
       this.book.reset();
     }
-    ws.addEventListener('open', () => {
-      this.reconnectDelays.delete(ep.url);
-      if (ep.depth) void this.resync('kết nối');
+    const stream = ep.depth ? 'sổ lệnh' : 'lệnh khớp';
+    const watch = watchSocket(ws, {
+      openTimeoutMs: WS_OPEN_TIMEOUT_MS,
+      idleTimeoutMs: WS_IDLE_TIMEOUT_MS,
+      onOpen: () => {
+        if (this.reconnectDelays.has(ep.url)) this.opts.log?.(`[orderflow] ${this.opts.symbol} WebSocket ${stream} đã kết nối lại`);
+        this.reconnectDelays.delete(ep.url);
+        if (ep.depth) void this.resync('kết nối');
+      },
+      onMessage: ev => {
+        if (this.sockets.get(ep.url) !== ws) return;
+        try {
+          this.onMessage(JSON.parse(String(ev.data)) as { data?: Record<string, unknown> });
+        } catch {
+          // Bỏ message hỏng.
+        }
+      },
+      // Mọi kiểu chết (close / error không kèm close / không mở được / treo) đều kết nối lại.
+      onDead: reason => {
+        if (this.sockets.get(ep.url) !== ws) return;
+        this.sockets.delete(ep.url);
+        this.watches.delete(ep.url);
+        if (reason !== 'close') this.lastError = `Lỗi WebSocket Binance (${reason})`;
+        if (ep.depth) this.book.reset();
+        // Chỉ log lần mất đầu tiên của một đợt (backoff đang ở mức đầu), tránh spam khi mất mạng lâu.
+        if (!this.reconnectDelays.has(ep.url)) this.opts.log?.(`[orderflow] ${this.opts.symbol} WebSocket ${stream} mất (${reason}) — đang kết nối lại`);
+        this.scheduleReconnect(ep);
+      },
     });
-    ws.addEventListener('message', ev => {
-      if (this.sockets.get(ep.url) !== ws) return;
-      try {
-        this.onMessage(JSON.parse(String(ev.data)) as { data?: Record<string, unknown> });
-      } catch {
-        // Bỏ message hỏng.
-      }
-    });
-    ws.addEventListener('close', () => {
-      if (this.sockets.get(ep.url) !== ws) return;
-      this.sockets.delete(ep.url);
-      if (ep.depth) this.book.reset();
-      this.scheduleReconnect(ep);
-    });
-    ws.addEventListener('error', () => {
-      this.lastError = 'Lỗi WebSocket Binance';
-    });
+    this.watches.set(ep.url, watch);
   }
 
   private scheduleReconnect(ep: StreamEndpoint): void {

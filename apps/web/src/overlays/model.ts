@@ -144,6 +144,8 @@ export const OF_MAX_WIDTH = 6;
 export const OF_MIN_WALL_RATIO = 0.4;
 /** Tối đa số tường mỗi phía (bán / mua). */
 export const OF_MAX_WALLS_PER_SIDE = 3;
+/** Order flow live: chỉ xét tường trong ±N% quanh giá close cuối (tường khổng lồ ở xa không đẩy ngưỡng 40% lên). */
+export const OF_WALL_RANGE_PCT = 3;
 
 export interface OverlayModel {
   markers: MarkerItem[];
@@ -281,9 +283,9 @@ export interface LiveOrderflowView {
   wallSegments?: WallSegment[];
 }
 
-function liveLines(live: LiveOrderflowView): OrderflowLineItem[] {
+function liveLines(live: LiveOrderflowView, refPrice?: number): OrderflowLineItem[] {
   if (!live.wallSegments) return buildOrderflowLines(live.levels);
-  return [...buildWallSegmentLines(live.wallSegments), ...buildOrderflowLines(live.levels.filter(l => l.kind === 'POC'))];
+  return [...buildWallSegmentLines(live.wallSegments, refPrice), ...buildOrderflowLines(live.levels.filter(l => l.kind === 'POC'))];
 }
 
 interface PositionTool {
@@ -402,7 +404,7 @@ export function buildOverlayModel(
   if (!candles.length) return EMPTY_MODEL;
   if (!analysis) {
     if (!opts.liveOrderflow || !layers.orderflow) return EMPTY_MODEL;
-    return { ...EMPTY_MODEL, orderflowLines: liveLines(opts.liveOrderflow) };
+    return { ...EMPTY_MODEL, orderflowLines: liveLines(opts.liveOrderflow, candles.at(-1)!.close) };
   }
   const curSec = tfSeconds(currentTf);
   const visibleTf = (tf: Timeframe) => opts.showLowerTfItems || tfSeconds(tf) >= curSec;
@@ -481,7 +483,7 @@ export function buildOverlayModel(
     }
   }
 
-  if (layers.orderflow && opts.liveOrderflow) model.orderflowLines = liveLines(opts.liveOrderflow);
+  if (layers.orderflow && opts.liveOrderflow) model.orderflowLines = liveLines(opts.liveOrderflow, last.close);
   else if (layers.orderflow && analysis.orderflow) model.orderflowLines = buildOrderflowLines(analysis.orderflow.levels);
 
   if (layers.forecast) {
@@ -597,9 +599,13 @@ export function buildOrderflowLines(levels: OrderflowLevels): OrderflowLineItem[
  * Lịch sử tường (Binance) thành các đoạn: tường còn tồn tại (≥ 40% tường lớn nhất đang tồn tại, ≤ 3 mỗi phía) kéo tới mép phải;
  * tường bị quét (đỉnh ≥ 40% tường lớn nhất, ≤ 6 gần nhất) dừng ở lúc bị quét + dấu ×; tường bị rút: nét chấm mờ, không nhãn.
  * Độ dày theo khối lượng đỉnh so với tường lớn nhất được vẽ.
+ * Có `refPrice` → chỉ xét tường trong ±OF_WALL_RANGE_PCT % quanh giá đó (cả khi tính tường lớn nhất).
  */
-export function buildWallSegmentLines(segments: readonly WallSegment[]): OrderflowLineItem[] {
-  const placed = segments.filter(s => s.price !== undefined);
+export function buildWallSegmentLines(segments: readonly WallSegment[], refPrice?: number): OrderflowLineItem[] {
+  const ref = refPrice !== undefined && Number.isFinite(refPrice) && refPrice > 0 ? refPrice : null;
+  const placed = segments.filter(
+    s => s.price !== undefined && (ref === null || Math.abs(s.price - ref) <= (ref * OF_WALL_RANGE_PCT) / 100),
+  );
   const maxActive = Math.max(0, ...placed.filter(s => s.status === 'active').map(s => s.peakSize));
   const maxAll = Math.max(0, ...placed.map(s => s.peakSize));
   const active: WallSegment[] = [];

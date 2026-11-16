@@ -20,7 +20,7 @@ type NumKey = keyof typeof DISPLAY_RANGES;
 const KEYS = Object.keys(DISPLAY_RANGES) as NumKey[];
 
 /** Đơn vị hiển thị sau giá trị thanh trượt (px, ×, % viết liền; còn lại cách một khoảng). */
-const unitSuffix = (unit: string) => (unit === 'px' || unit === '×' || unit === '%' ? unit : ` ${unit}`);
+const unitSuffix = (unit: string) => (unit === '' || unit === 'px' || unit === '×' || unit === '%' ? unit : ` ${unit}`);
 
 /** Số khối lượng gọn cho gợi ý / ô nhập (giữ 2 chữ số có nghĩa với số nhỏ). */
 function fmtQty(n: number): string {
@@ -148,8 +148,8 @@ export function SettingsButton() {
                       onChange={e => update({ [k]: Number(e.target.value) } as Partial<DisplaySettings>)}
                     />
                     <b>
-                      {v}
-                      {unitSuffix(r.unit)}
+                      {k === 'bookHeatLabels' && v === 0 ? 'tắt' : v}
+                      {k === 'bookHeatLabels' && v === 0 ? '' : unitSuffix(r.unit)}
                     </b>
                   </span>
                 </label>

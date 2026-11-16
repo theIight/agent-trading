@@ -3,6 +3,7 @@ import { mergeVolumes, OKX_BAR, type OkxVolumeClient } from './okx.ts';
 import type { FetchKlinesParams, MarketDataProvider } from './provider.ts';
 import { aggregateWeekly, weekStartUtc, type TiingoFxClient } from './tiingo.ts';
 import type { LiveEvent } from './livePoller.ts';
+import { watchSocket, type SocketWatch } from '../ws/watchSocket.ts';
 
 // XAUUSD: giá vàng giao ngay từ Tiingo + volume hợp đồng OKX XAU-USDT-SWAP (proxy cho nỗ lực).
 
@@ -120,6 +121,7 @@ interface Feed {
  */
 export class TiingoOkxLive {
   private ws: WebSocket | null = null;
+  private watch: SocketWatch | null = null;
   private feeds = new Map<string, Feed>();
   private retry = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
@@ -205,23 +207,28 @@ export class TiingoOkxLive {
     if (this.ws || !this.provider.tiingo.token) return;
     const ws = this.wsFactory('wss://api.tiingo.com/fx');
     this.ws = ws;
-    ws.onopen = () => {
-      this.retry = 0;
-      this.sendSubscribe(ws);
-    };
-    ws.onmessage = ev => {
-      const q = parseTiingoFxMessage(String(ev.data));
-      if (q) this.onQuote(q.ticker, q.time, q.mid);
-    };
-    ws.onclose = () => {
-      if (this.ws !== ws) return;
-      this.ws = null;
-      if (!this.feeds.size) return;
-      const delay = Math.min(30_000, 1000 * 2 ** this.retry++);
-      this.reconnectTimer = setTimeout(() => this.ensureSocket(), delay);
-      this.reconnectTimer.unref?.();
-    };
-    ws.onerror = () => ws.close();
+    // Không kiểm tra im lặng: cuối tuần FX có thể không có quote.
+    this.watch = watchSocket(ws, {
+      openTimeoutMs: 20_000,
+      onOpen: () => {
+        this.retry = 0;
+        this.sendSubscribe(ws);
+      },
+      onMessage: ev => {
+        const q = parseTiingoFxMessage(String(ev.data));
+        if (q) this.onQuote(q.ticker, q.time, q.mid);
+      },
+      // Node 22: mở thất bại chỉ có `error`, không có `close` → kết nối lại ở mọi kiểu chết.
+      onDead: () => {
+        if (this.ws !== ws) return;
+        this.ws = null;
+        this.watch = null;
+        if (!this.feeds.size) return;
+        const delay = Math.min(30_000, 1000 * 2 ** this.retry++);
+        this.reconnectTimer = setTimeout(() => this.ensureSocket(), delay);
+        this.reconnectTimer.unref?.();
+      },
+    });
   }
 
   private sendSubscribe(ws: WebSocket): void {
@@ -231,8 +238,14 @@ export class TiingoOkxLive {
 
   private closeSocket(): void {
     clearTimeout(this.reconnectTimer);
+    this.watch?.dispose();
+    this.watch = null;
     const ws = this.ws;
     this.ws = null;
-    ws?.close();
+    try {
+      ws?.close();
+    } catch {
+      /* socket hỏng */
+    }
   }
 }
