@@ -1,6 +1,6 @@
 import { BOOK_HEATMAP_HOURS, BOOK_HEATMAP_MAX_COLS, roundPrice, type BookHeatmap, type WallSegment } from '@wca/shared';
 import { buildHeatColumns, colStart, type HeatColumn } from './bookHeatmap.ts';
-import { basisByMinute, buildSnapshot, findWallSegments, medianBasis, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
+import { basisByMinute, buildSnapshot, medianBasis, WallTracker, type BinanceOrderflowSnapshot, type SpotCandle } from './calc.ts';
 import type { BookSample } from './localBook.ts';
 import type { BookMarket } from './localBook.ts';
 import { BINANCE_FUTURES_REST, BINANCE_SPOT_REST, BookCollector, type CollectorStatus } from './collector.ts';
@@ -75,6 +75,8 @@ export function sizeUnit(sourceSymbol: string): string {
 export const LIVE_CACHE_SEC = 10;
 /** Cửa sổ lịch sử tường trên chart. */
 export const WALL_HISTORY_H = 24;
+/** Hai mẫu cách nhau quá số giây này = mất dữ liệu (snapshot chỉ dùng đoạn liên tục cuối). */
+const BOOK_GAP_SEC = 300;
 
 export interface LiveOrderflowSnapshot extends BinanceOrderflowSnapshot {
   /** Lịch sử tường 24h (giá chart = spot − basis: hiện tại cho tường còn tồn tại, lúc kết thúc cho tường đã hết). */
@@ -93,6 +95,8 @@ export class BinanceOrderflow {
   private readonly chartCache = new Map<string, { minute: number; candles: readonly { time: number; close: number }[] }>();
   /** Cột heatmap sổ lệnh đã đóng (và đã qua 1 phút để basis ổn định) theo `symbol:colSec`. */
   private readonly heatCache = new Map<string, HeatColumn[]>();
+  /** Trạng thái lịch sử tường theo symbol (tính tăng dần). */
+  readonly wallTrackers = new Map<string, WallTracker>();
   /** Số request klines đã gọi (để test cache). */
   klineRequests = 0;
 
@@ -195,13 +199,30 @@ export class BinanceOrderflow {
     return { at: t => medianBasis(byMin, Math.min(Math.floor(t / 60) * 60, lastClosed), 60, ref) ?? current, current, fallback: cur === null };
   }
 
-  /** Lịch sử tường 24h (chưa quy đổi giá). */
+  /**
+   * Mẫu sổ lệnh liên tục gần nhất trong BOOK_WINDOW_MIN phút (bỏ phần trước khoảng mất dữ liệu > 5 phút), lấy từ cache đã parse
+   * thay vì đọc lại SQLite + JSON.parse mỗi lần (cùng kết quả với `collector.samples`).
+   */
+  bookWindowSamples(symbol: string, now: number): BookSample[] {
+    const from = now - BOOK_WINDOW_MIN * 60;
+    const all = this.historySamples(symbol, now);
+    let i = all.length;
+    while (i > 0 && all[i - 1]!.t > now) i--;
+    const end = i;
+    while (i > 0 && all[i - 1]!.t >= from && (i === end || all[i]!.t - all[i - 1]!.t <= BOOK_GAP_SEC)) i--;
+    return all.slice(i, end);
+  }
+
+  /** Lịch sử tường 24h (chưa quy đổi giá), tính tăng dần: mỗi lần chỉ xử lý mẫu mới. */
   async wallSegments(symbol: string, now: number): Promise<WallSegment[]> {
     const candles = await this.spotCandles(symbol, now);
-    return findWallSegments(this.historySamples(symbol, now), candles, {
-      bucket: this.opts.buckets[symbol] ?? 10,
-      minSize: this.opts.wallMin?.[symbol] ?? 0,
-    });
+    let tracker = this.wallTrackers.get(symbol);
+    if (!tracker) {
+      tracker = new WallTracker({ bucket: this.opts.buckets[symbol] ?? 10, minSize: this.opts.wallMin?.[symbol] ?? 0 });
+      this.wallTrackers.set(symbol, tracker);
+    }
+    tracker.push(this.historySamples(symbol, now), candles);
+    return tracker.segments(now - WALL_HISTORY_H * 3600);
   }
 
   /**
@@ -277,7 +298,7 @@ export class BinanceOrderflow {
       unit: sizeUnit(ref.symbol),
       now,
       bucket,
-      samples: src.samples(now - BOOK_WINDOW_MIN * 60, now),
+      samples: this.bookWindowSamples(symbol, now),
       candles,
       trades: src.trades(now - TRADE_WINDOW_H * 3600, now),
       appPrice,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { AnalysisResult, Candle, TradePlan, TradeSetup } from '@wca/shared';
-import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, EMPTY_MODEL, buildWallSegmentLines, LABEL_HEIGHT, MIN_TOOL_BARS } from '../apps/web/src/overlays/model.ts';
+import { buildOverlayModel, layoutLabels, makeTimeMapper, snapToBar, ALL_LAYERS_ON, EMPTY_MODEL, buildWallSegmentLines, LABEL_HEIGHT, MIN_TOOL_BARS, OF_WALL_RANGE_PCT } from '../apps/web/src/overlays/model.ts';
 
 const H4 = 14400;
 const T0 = 1_790_000_000 - (1_790_000_000 % H4);
@@ -309,6 +309,20 @@ describe('layer Order flow (Bookmap)', () => {
     expect(buildOverlayModel(null, candles, '4h')).toEqual(EMPTY_MODEL);
   });
 
+  it('lịch sử tường: chỉ xét tường trong ±3% quanh giá tham chiếu (tường khổng lồ ở xa không đẩy ngưỡng)', () => {
+    const seg = (side: 'BID' | 'ASK', price: number, peakSize: number) =>
+      ({ side, sourcePrice: price, price, start: 100, end: null, peakSize, status: 'active' as const });
+    const segs = [seg('BID', 59970, 1033), seg('BID', 64970, 333), seg('ASK', 66670, 198)];
+    expect(OF_WALL_RANGE_PCT).toBe(3);
+    expect(buildWallSegmentLines(segs, 65400).map(l => [l.side, l.price, l.label])).toEqual([
+      ['ASK', 66670, '198'],
+      ['BID', 64970, '333'],
+    ]);
+    // Không có giá tham chiếu → hành vi cũ: tường xa chiếm ngưỡng.
+    expect(buildWallSegmentLines(segs).map(l => l.price)).toEqual([59970]);
+    expect(buildWallSegmentLines(segs, Number.NaN).map(l => l.price)).toEqual([59970]);
+  });
+
   it('lịch sử tường: còn tồn tại kéo tới mép phải, bị quét dừng + ×, bị rút nét chấm mờ không nhãn', () => {
     const seg = (side: 'BID' | 'ASK', price: number, peakSize: number, status: 'active' | 'consumed' | 'pulled', start: number, end: number | null) =>
       ({ side, sourcePrice: price + 20, price, start, end, peakSize, status });
@@ -324,7 +338,9 @@ describe('layer Order flow (Bookmap)', () => {
       [74000, '30', 3.5, false, 200, 900, true],
       [73100, '', 1, true, 300, 700, false],
     ]);
-    const model = buildOverlayModel(null, candles, '4h', {
+    // Nến close 73500 → tường 72980 nằm trong ±3%.
+    const near = candles.map(c => ({ ...c, open: 73500, high: 73600, low: 73400, close: 73500 }));
+    const model = buildOverlayModel(null, near, '4h', {
       liveOrderflow: { levels: [{ kind: 'POC', price: 74300, strength: 0.7, note: '' }], wallSegments: [seg('BID', 72980, 60, 'active', 100, null)] },
     });
     expect(model.orderflowLines.map(l => l.label)).toEqual(['60', 'POC']);

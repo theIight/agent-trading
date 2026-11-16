@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { BookHeatmap } from '@wca/shared';
 import { DEFAULT_DISPLAY, DISPLAY_RANGES, bookHeatMinQtyOf, sanitizeDisplay, withBookHeatMinQty } from '../apps/web/src/chart/displaySettings.ts';
-import { bookHeatColor, heatScale, heatStats, intensityOf, lastClosedCol, mergeHeatmap } from '../apps/web/src/overlays/bookHeatmapModel.ts';
+import { bookHeatColor, heatBands, heatScale, heatStats, intensityOf, lastClosedCol, mergeHeatmap, pickHeatLabels } from '../apps/web/src/overlays/bookHeatmapModel.ts';
 
 const H = (cols: number[], over: Partial<BookHeatmap> = {}): BookHeatmap => ({
   symbol: 'BTCUSDT',
@@ -134,5 +134,60 @@ describe('cài đặt heatmap sổ lệnh', () => {
     expect(sanitizeDisplay({ bookHeatHidePct: 80 }).bookHeatHidePct).toBe(80);
     expect(sanitizeDisplay({ bookHeatHidePct: -3 }).bookHeatHidePct).toBe(0);
     expect(sanitizeDisplay({ bookHeatHidePct: 62 }).bookHeatHidePct).toBe(60);
+  });
+});
+
+describe('nhãn dải thanh khoản heatmap sổ lệnh', () => {
+  // bucket 10, shift 30 → giá chart tâm bucket ix = ix × 10 − 30 + 5.
+  const cols = [0, 60, 120, 180, 240, 300, 360, 420];
+  const view = { c0: 0, c1: 7, low: 0, high: 10_000 };
+  const mk = (data: number[][]) => H(cols, { data });
+
+  it('chuỗi liên tục → một dải, đỉnh và giá đúng', () => {
+    const h = mk([[100, 2], [100, 5], [100, 3], [], [], [], [], []]);
+    expect(heatBands(h, view, 1)).toEqual([{ ix: 100, start: 0, end: 2, peak: 5, peakCol: 1, price: 975 }]);
+  });
+
+  it('hụt 1 cột vẫn nối, hụt 2 cột thì tách', () => {
+    const h = mk([[100, 2], [], [100, 4], [], [], [100, 9], [], []]);
+    const bands = heatBands(h, view, 1);
+    expect(bands.map(b => [b.start, b.end, b.peak])).toEqual([
+      [5, 5, 9],
+      [0, 2, 4],
+    ]);
+  });
+
+  it('ô < min không tính; dải ngắn hơn minCols bị bỏ', () => {
+    const h = mk([[100, 2, 200, 0.5], [100, 2, 200, 0.5], [300, 7], [], [], [], [], []]);
+    expect(heatBands(h, view, 1).map(b => b.ix)).toEqual([300, 100]);
+    expect(heatBands(h, view, 1, 2).map(b => b.ix)).toEqual([100]);
+  });
+
+  it('dải bắt đầu trước vùng nhìn vẫn giữ (giá tại c0); kết thúc trước vùng nhìn hoặc ngoài giá thì bỏ', () => {
+    const h = mk([[100, 2, 500, 3], [100, 2], [100, 2], [100, 2], [100, 6], [], [], []]);
+    const v = { c0: 3, c1: 7, low: 900, high: 1000 };
+    const bands = heatBands({ ...h, shift: h.shift.map((s, i) => (i === 3 ? 40 : s)) }, v, 1);
+    expect(bands).toEqual([{ ix: 100, start: 0, end: 4, peak: 6, peakCol: 4, price: 965 }]);
+    expect(heatBands(h, { ...v, low: 0, high: 900 }, 1)).toEqual([]);
+  });
+
+  it('pickHeatLabels: bỏ nhãn chồng khung, tối đa n, n = 0 → rỗng', () => {
+    const items = [
+      { x: 10, y: 50, w: 20, h: 11 },
+      { x: 25, y: 55, w: 20, h: 11 },
+      { x: 25, y: 70, w: 20, h: 11 },
+      { x: 100, y: 50, w: 20, h: 11 },
+    ];
+    expect(pickHeatLabels(items, 10)).toEqual([0, 2, 3]);
+    expect(pickHeatLabels(items, 2)).toEqual([0, 2]);
+    expect(pickHeatLabels(items, 0)).toEqual([]);
+  });
+
+  it('bookHeatLabels kẹp 0–30, mặc định 12', () => {
+    expect(DEFAULT_DISPLAY.bookHeatLabels).toBe(12);
+    expect(sanitizeDisplay({}).bookHeatLabels).toBe(12);
+    expect(sanitizeDisplay({ bookHeatLabels: 0 }).bookHeatLabels).toBe(0);
+    expect(sanitizeDisplay({ bookHeatLabels: 99 }).bookHeatLabels).toBe(30);
+    expect(sanitizeDisplay({ bookHeatLabels: 4.4 }).bookHeatLabels).toBe(4);
   });
 });

@@ -11,9 +11,21 @@ import type {
 } from 'lightweight-charts';
 import type { CanvasRenderingTarget2D } from 'fancy-canvas';
 import type { BookHeatmap } from '@wca/shared';
-import { bookHeatColor, heatScale, heatStats, intensityOf, type HeatScale } from './bookHeatmapModel.ts';
+import {
+  bookHeatColor,
+  heatBands,
+  heatScale,
+  heatStats,
+  intensityOf,
+  pickHeatLabels,
+  type HeatBand,
+  type HeatScale,
+  type HeatView,
+} from './bookHeatmapModel.ts';
 import { timeToX, type TimeMapper } from './LiquidationPrimitive.ts';
-import { bookHeatMinQtyOf, display } from '../chart/displaySettings.ts';
+import { isLightText } from './OverlayPrimitive.ts';
+import { fmtSize } from './model.ts';
+import { bookHeatMinQtyOf, display, font } from '../chart/displaySettings.ts';
 import { useBookHeatmapStore } from '../store/useBookHeatmapStore.ts';
 
 // Heatmap sổ lệnh: khối lượng lệnh chờ trung bình theo bucket × cột, vẽ sau nến.
@@ -28,7 +40,23 @@ interface Ctx {
   chart: IChartApi;
   series: ISeriesApi<SeriesType>;
   data: BookHeatData;
+  /** Kết quả lần vẽ nền gần nhất, lớp nhãn (trên nến) dùng lại. */
+  frame: Frame | null;
 }
+
+interface Frame {
+  h: BookHeatmap;
+  xs: (readonly [number | null, number | null])[];
+  view: HeatView;
+  scale: HeatScale;
+  /** Khoá thang màu (đổi khi đổi ngưỡng / vùng nhìn). */
+  key: string;
+}
+
+/** Nhãn chữ không lấy màu tối hơn mức này của thang (xanh đậm khó đọc trên nền tối). */
+const LABEL_MIN_INTENSITY = 110;
+/** Dải ngắn hơn 5 phút không ghi nhãn. */
+const BAND_MIN_SEC = 300;
 
 const palettes = new Map<number, string[]>();
 function palette(opacity: number): string[] {
@@ -51,6 +79,7 @@ class Renderer implements IPrimitivePaneRenderer {
   drawBackground(target: CanvasRenderingTarget2D): void {
     const { data, series, chart } = this.ctx;
     const h = data.heatmap;
+    this.ctx.frame = null;
     if (!data.show || !h || !h.cols.length) return;
     const s = display();
     const colors = palette(s.bookHeatOpacity);
@@ -79,6 +108,7 @@ class Renderer implements IPrimitivePaneRenderer {
       }
       const scale = this.scale;
       const min = scale.min;
+      this.ctx.frame = { h, xs, view, scale, key };
       for (const ci of vis) {
         const [x1, x2] = xs[ci] as [number, number];
         const w = Math.max(1, x2 - x1);
@@ -99,10 +129,61 @@ class Renderer implements IPrimitivePaneRenderer {
   }
 }
 
+/** Nhãn khối lượng đỉnh tại điểm bắt đầu mỗi dải thanh khoản (cỡ chữ = nhãn order flow), vẽ trên nến. */
+class LabelRenderer implements IPrimitivePaneRenderer {
+  private bandsKey: { h: BookHeatmap; key: string } | null = null;
+  private bands: HeatBand[] = [];
+  constructor(private readonly ctx: Ctx) {}
+  draw(target: CanvasRenderingTarget2D): void {
+    const { frame, series, chart } = this.ctx;
+    const s = display();
+    const n = s.bookHeatLabels;
+    if (!frame || n <= 0) return;
+    const { h, xs, view, scale, key } = frame;
+    if (!this.bandsKey || this.bandsKey.h !== h || this.bandsKey.key !== key) {
+      this.bands = heatBands(h, view, scale.min, Math.max(1, Math.ceil(BAND_MIN_SEC / h.colSec)));
+      this.bandsKey = { h, key };
+    }
+    if (!this.bands.length) return;
+    const textColor = chart.options().layout.textColor;
+    const dark = isLightText(textColor);
+    const colors = palette(100);
+    target.useMediaCoordinateSpace(({ context: c, mediaSize }) => {
+      c.font = font(s.ofFontPx);
+      c.textAlign = 'left';
+      c.textBaseline = 'middle';
+      const items: { x: number; y: number; w: number; h: number; text: string; band: HeatBand }[] = [];
+      // Giới hạn số dải đo chữ (đã sắp theo đỉnh giảm dần).
+      for (const band of this.bands.slice(0, n * 6)) {
+        const col = Math.max(band.start, view.c0);
+        const x0 = xs[col]?.[0];
+        const y = series.priceToCoordinate(band.price);
+        if (x0 == null || y === null || y < 0 || y > mediaSize.height) continue;
+        const x = Math.max(4, x0 + 3);
+        if (x > mediaSize.width) continue;
+        const text = fmtSize(band.peak);
+        items.push({ x, y, w: c.measureText(text).width, h: s.ofFontPx + 1, text, band });
+      }
+      c.lineJoin = 'round';
+      c.lineWidth = 3;
+      c.strokeStyle = dark ? 'rgba(10,12,18,0.85)' : 'rgba(255,255,255,0.85)';
+      for (const i of pickHeatLabels(items, n)) {
+        const it = items[i]!;
+        c.strokeText(it.text, it.x, it.y);
+        c.fillStyle = dark ? colors[Math.max(LABEL_MIN_INTENSITY, intensityOf(it.band.peak, scale))]! : textColor;
+        c.fillText(it.text, it.x, it.y);
+      }
+    });
+  }
+}
+
 class View implements IPrimitivePaneView {
-  constructor(private readonly renderer_: IPrimitivePaneRenderer) {}
+  constructor(
+    private readonly renderer_: IPrimitivePaneRenderer,
+    private readonly z: PrimitivePaneViewZOrder = 'bottom',
+  ) {}
   zOrder(): PrimitivePaneViewZOrder {
-    return 'bottom';
+    return this.z;
   }
   renderer(): IPrimitivePaneRenderer {
     return this.renderer_;
@@ -117,8 +198,8 @@ export class BookHeatmapPrimitive implements ISeriesPrimitive<Time> {
 
   attached(param: SeriesAttachedParameter<Time>): void {
     this.requestUpdate = param.requestUpdate;
-    this.ctx = { chart: param.chart, series: param.series, data: this.data };
-    this.views = [new View(new Renderer(this.ctx))];
+    this.ctx = { chart: param.chart, series: param.series, data: this.data, frame: null };
+    this.views = [new View(new Renderer(this.ctx)), new View(new LabelRenderer(this.ctx), 'top')];
   }
 
   detached(): void {

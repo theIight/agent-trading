@@ -145,6 +145,49 @@ button, input { font: inherit; color: inherit; }
 }
 
 .legend-title { font-weight: 600; }
+
+/* Menu chuột phải trên chart (copy giá). */
+.chart-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 170px;
+  padding: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--panel);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
+  font-size: 12px;
+}
+.chart-menu button {
+  padding: 6px 12px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.chart-menu button:hover,
+.chart-menu button:focus-visible { background: var(--border); outline: none; }
+.chart-menu b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.chart-toast {
+  position: absolute;
+  bottom: 40px;
+  left: 50%;
+  z-index: 20;
+  transform: translateX(-50%);
+  padding: 6px 12px;
+  border-radius: 4px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-size: 12px;
+  pointer-events: none;
+}
+.chart-toast.error { background: var(--down); border-color: var(--down); color: #fff; }
 .legend .up b { color: var(--up); font-weight: 500; }
 .legend .down b { color: var(--down); font-weight: 500; }
 

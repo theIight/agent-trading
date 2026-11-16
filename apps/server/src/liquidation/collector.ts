@@ -1,5 +1,6 @@
 import type { LiqSide, LiqVenue } from '@wca/shared';
 import type { Db } from '../db/index.ts';
+import { watchSocket, type SocketWatch } from '../ws/watchSocket.ts';
 import { parseBinanceForceOrder, parseOkxLiquidations, type RawLiquidation, type StoredLiquidation } from './model.ts';
 
 // Collector thanh lý thật: Binance Futures `!forceOrder@arr` + OKX `liquidation-orders` (WebSocket công khai, không cần key).
@@ -9,6 +10,13 @@ export const BINANCE_LIQ_WS = 'wss://fstream.binance.com/market/ws/!forceOrder@a
 export const OKX_PUBLIC_WS = 'wss://ws.okx.com:8443/ws/v5/public';
 /** OKX đóng kết nối sau 30 giây không có message → gửi `ping`. */
 const OKX_PING_MS = 25_000;
+/** Chưa mở được sau khoảng này → bỏ socket, kết nối lại. */
+const WS_OPEN_TIMEOUT_MS = 20_000;
+/**
+ * Đã mở mà im lặng quá lâu → coi là treo. OKX có `pong` mỗi 25s; Binance `!forceOrder@arr` (toàn sàn)
+ * hiếm khi im quá vài chục giây nhưng lúc thị trường rất yên có thể lâu hơn → nới rộng.
+ */
+const WS_IDLE_TIMEOUT_MS: Record<LiqVenue, number> = { okx: 60_000, binance: 300_000 };
 
 export interface LiquidationCollectorOptions {
   /** Symbol chart = symbol Binance Futures (vd BTCUSDT). */
@@ -28,6 +36,7 @@ interface Endpoint {
 
 export class LiquidationCollector {
   private sockets = new Map<LiqVenue, WebSocket>();
+  private watches = new Map<LiqVenue, SocketWatch>();
   private reconnectTimers = new Map<LiqVenue, ReturnType<typeof setTimeout>>();
   private delays = new Map<LiqVenue, number>();
   private timers: ReturnType<typeof setInterval>[] = [];
@@ -73,6 +82,8 @@ export class LiquidationCollector {
     this.timers = [];
     for (const t of this.reconnectTimers.values()) clearTimeout(t);
     this.reconnectTimers.clear();
+    for (const w of this.watches.values()) w.dispose();
+    this.watches.clear();
     const sockets = [...this.sockets.values()];
     this.sockets.clear();
     for (const ws of sockets) ws.close();
@@ -94,26 +105,34 @@ export class LiquidationCollector {
     if (this.stopped) return;
     const ws = this.wsFactory(ep.url);
     this.sockets.set(ep.venue, ws);
-    ws.addEventListener('open', () => {
-      this.delays.delete(ep.venue);
-      if (ep.venue === 'okx') ws.send(JSON.stringify({ op: 'subscribe', args: [{ channel: 'liquidation-orders', instType: 'SWAP' }] }));
+    const watch = watchSocket(ws, {
+      openTimeoutMs: WS_OPEN_TIMEOUT_MS,
+      idleTimeoutMs: WS_IDLE_TIMEOUT_MS[ep.venue],
+      onOpen: () => {
+        if (this.delays.has(ep.venue)) this.opts.log?.(`[liquidation] WebSocket ${ep.venue} đã kết nối lại`);
+        this.delays.delete(ep.venue);
+        if (ep.venue === 'okx') ws.send(JSON.stringify({ op: 'subscribe', args: [{ channel: 'liquidation-orders', instType: 'SWAP' }] }));
+      },
+      onMessage: ev => {
+        if (this.sockets.get(ep.venue) !== ws) return;
+        const text = String(ev.data);
+        if (text === 'pong') return;
+        try {
+          this.handleMessage(ep.venue, JSON.parse(text));
+        } catch {
+          // Bỏ message hỏng.
+        }
+      },
+      // Mọi kiểu chết (close / error không kèm close / không mở được / treo) đều kết nối lại.
+      onDead: reason => {
+        if (this.sockets.get(ep.venue) !== ws) return;
+        this.sockets.delete(ep.venue);
+        this.watches.delete(ep.venue);
+        if (!this.delays.has(ep.venue)) this.opts.log?.(`[liquidation] WebSocket ${ep.venue} mất (${reason}) — đang kết nối lại`);
+        this.scheduleReconnect(ep);
+      },
     });
-    ws.addEventListener('message', ev => {
-      if (this.sockets.get(ep.venue) !== ws) return;
-      const text = String(ev.data);
-      if (text === 'pong') return;
-      try {
-        this.handleMessage(ep.venue, JSON.parse(text));
-      } catch {
-        // Bỏ message hỏng.
-      }
-    });
-    ws.addEventListener('close', () => {
-      if (this.sockets.get(ep.venue) !== ws) return;
-      this.sockets.delete(ep.venue);
-      this.scheduleReconnect(ep);
-    });
-    ws.addEventListener('error', () => this.opts.log?.(`[liquidation] lỗi WebSocket ${ep.venue}`));
+    this.watches.set(ep.venue, watch);
   }
 
   private scheduleReconnect(ep: Endpoint): void {

@@ -153,7 +153,7 @@ describe('realtime Tiingo', () => {
 
   it('feed: seed từ REST, quote cập nhật, subscribe WebSocket đúng ticker, dừng khi hết người xem', async () => {
     const sent: string[] = [];
-    const fakeWs = { readyState: 0, send: (m: string) => sent.push(m), close: () => {}, onopen: null as null | (() => void), onmessage: null, onclose: null, onerror: null };
+    const fakeWs = Object.assign(new EventTarget(), { readyState: 0, send: (m: string) => sent.push(m), close: () => {} });
     const provider = new TiingoOkxProvider({
       tiingo: ({ fetchBars: async () => [c(MON, 100)], token: 'tk', quota: new RequestQuota(9, 9) }) as unknown as TiingoFxClient,
       okx: ({ volumes: async () => [], latest: async () => [] }) as unknown as OkxVolumeClient,
@@ -162,7 +162,8 @@ describe('realtime Tiingo', () => {
     const events: LiveEvent[] = [];
     const unsub = live.subscribe('XAUUSD', '1h', e => events.push(e));
     await new Promise(r => setTimeout(r, 0));
-    fakeWs.onopen?.();
+    fakeWs.readyState = 1;
+    fakeWs.dispatchEvent(new Event('open'));
     expect(JSON.parse(sent[0]!)).toEqual({ eventName: 'subscribe', authorization: 'tk', eventData: { thresholdLevel: 5, tickers: ['xauusd'] } });
     live.onQuote('xauusd', MON + 600, 103);
     live.onQuote('eurusd', MON + 600, 1.1);
