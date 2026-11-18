@@ -126,3 +126,151 @@ export function formatAlert(
   const text = parts.join(' · ');
   return hit.note ? `${text}\n<i>${escapeHtml(hit.note)}</i>` : text;
 }
+
+// ---------- Logic theo dõi Take Profit & Stop Loss khi đã vào lệnh ----------
+
+export function calculateRiskReward(
+  direction: 'LONG' | 'SHORT',
+  entryPrice: number,
+  stopLoss: number,
+  targetPrice: number,
+): number {
+  const risk = Math.abs(entryPrice - stopLoss);
+  if (risk === 0) return 0;
+  const reward = direction === 'LONG' ? targetPrice - entryPrice : entryPrice - targetPrice;
+  return Math.round((reward / risk) * 100) / 100;
+}
+
+export function calculatePnlPct(
+  direction: 'LONG' | 'SHORT',
+  entryPrice: number,
+  targetPrice: number,
+): number {
+  if (entryPrice === 0) return 0;
+  const pct = direction === 'LONG' ? ((targetPrice - entryPrice) / entryPrice) * 100 : ((entryPrice - targetPrice) / entryPrice) * 100;
+  return Math.round(pct * 100) / 100;
+}
+
+export interface PositionEvaluation {
+  hitTps: { index: number; price: number; time: number; rr: number; pnlPct: number }[];
+  slHit?: { price: number; time: number; rr: number; pnlPct: number };
+}
+
+/**
+ * Đánh giá vị thế đang chạy với nến 1m đã đóng.
+ */
+export function evaluatePositionCandles(
+  alert: Pick<PriceAlert, 'direction' | 'stopLoss' | 'takeProfits'> & { entryPrice: number },
+  candles: readonly Candle[],
+  alreadyHitIndices: ReadonlySet<number>,
+  sinceSec: number,
+): PositionEvaluation {
+  const hitTps: PositionEvaluation['hitTps'] = [];
+  const hitSet = new Set(alreadyHitIndices);
+  let slHit: PositionEvaluation['slHit'];
+
+  const entry = alert.entryPrice;
+  const sl = alert.stopLoss;
+
+  for (const c of candles) {
+    if (c.time < sinceSec) continue;
+
+    // 1. Kiểm tra các TP chưa chạm
+    for (let i = 0; i < alert.takeProfits.length; i++) {
+      if (hitSet.has(i)) continue;
+      const tp = alert.takeProfits[i]!;
+      const hit = alert.direction === 'LONG' ? c.high >= tp : c.low <= tp;
+      if (hit) {
+        hitSet.add(i);
+        const rr = calculateRiskReward(alert.direction, entry, sl, tp);
+        const pnlPct = calculatePnlPct(alert.direction, entry, tp);
+        hitTps.push({ index: i, price: tp, time: c.time, rr, pnlPct });
+      }
+    }
+
+    // 2. Kiểm tra SL
+    const hitSl = alert.direction === 'LONG' ? c.low <= sl : c.high >= sl;
+    if (hitSl) {
+      const rr = calculateRiskReward(alert.direction, entry, sl, sl);
+      const pnlPct = calculatePnlPct(alert.direction, entry, sl);
+      slHit = { price: sl, time: c.time, rr, pnlPct };
+      break; // Khi chạm SL thì dừng vị thế
+    }
+  }
+
+  return { hitTps, slHit };
+}
+
+/**
+ * Đánh giá vị thế tức thời theo tick giá.
+ */
+export function evaluatePositionPrice(
+  alert: Pick<PriceAlert, 'direction' | 'stopLoss' | 'takeProfits'> & { entryPrice: number },
+  price: number,
+  timeSec: number,
+  alreadyHitIndices: ReadonlySet<number>,
+): PositionEvaluation {
+  const hitTps: PositionEvaluation['hitTps'] = [];
+  const entry = alert.entryPrice;
+  const sl = alert.stopLoss;
+
+  for (let i = 0; i < alert.takeProfits.length; i++) {
+    if (alreadyHitIndices.has(i)) continue;
+    const tp = alert.takeProfits[i]!;
+    const hit = alert.direction === 'LONG' ? price >= tp : price <= tp;
+    if (hit) {
+      const rr = calculateRiskReward(alert.direction, entry, sl, tp);
+      const pnlPct = calculatePnlPct(alert.direction, entry, tp);
+      hitTps.push({ index: i, price: tp, time: timeSec, rr, pnlPct });
+    }
+  }
+
+  const hitSl = alert.direction === 'LONG' ? price <= sl : price >= sl;
+  const slHit = hitSl
+    ? {
+        price,
+        time: timeSec,
+        rr: calculateRiskReward(alert.direction, entry, sl, sl),
+        pnlPct: calculatePnlPct(alert.direction, entry, sl),
+      }
+    : undefined;
+
+  return { hitTps, slHit };
+}
+
+export function formatTpHit(
+  symbol: string,
+  direction: string,
+  setupIndex: number,
+  tpIndex: number,
+  tpCount: number,
+  price: number,
+  rr: number,
+  pnlPct: number,
+): string {
+  const mark = SETUP_MARKS[setupIndex] ?? `${setupIndex + 1}.`;
+  const isFinal = tpIndex === tpCount - 1;
+  const emoji = isFinal ? '🏆' : '🎯';
+  return (
+    `${emoji} <b>${escapeHtml(symbol)}</b> chạm <b>TP${tpIndex + 1}</b> ${mark} ${direction} · ` +
+    `giá ${fmtPrice(price)} · +${rr.toFixed(2)}R (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)` +
+    (isFinal ? ' · <i>đạt mục tiêu cuối!</i>' : '')
+  );
+}
+
+export function formatSlHit(
+  symbol: string,
+  direction: string,
+  setupIndex: number,
+  price: number,
+  rr: number,
+  pnlPct: number,
+  alreadyHadTps: boolean,
+): string {
+  const mark = SETUP_MARKS[setupIndex] ?? `${setupIndex + 1}.`;
+  return (
+    `🛑 <b>${escapeHtml(symbol)}</b> chạm <b>Stop Loss</b> ${mark} ${direction} · ` +
+    `giá ${fmtPrice(price)} · ${rr.toFixed(2)}R (${pnlPct.toFixed(2)}%)` +
+    (alreadyHadTps ? ' · <i>(đã chốt một phần TP trước đó)</i>' : '')
+  );
+}

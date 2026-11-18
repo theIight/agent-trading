@@ -146,7 +146,7 @@ export class AnalysisService {
   // ---------- Sự kiện ----------
   subscribe(listener: (e: ProgressEvent) => void, analysisId?: string): () => void {
     const handler = (e: ProgressEvent) => {
-      if (!analysisId || e.analysisId === analysisId) listener(e);
+      if (!analysisId || ('analysisId' in e && e.analysisId === analysisId)) listener(e);
     };
     this.bus.on('event', handler);
     return () => this.bus.off('event', handler);

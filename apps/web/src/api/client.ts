@@ -1,4 +1,4 @@
-import type { AnalysisRecord, PriceAlert, BookHeatmap, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment } from '@wca/shared';
+import type { AnalysisRecord, PriceAlert, ChartAlert, BookHeatmap, BookmapUiConfig, InstrumentInfo, KlinesResponse, LiveLiquidations, VolumeAggResponse, OrderflowLevel, ProgressEvent, RunnerId, RunnerInfo, Timeframe, WallSegment, SetupHistoryRecord, SetupPerformanceSummary } from '@wca/shared';
 
 export interface ServerConfig {
   defaultSymbol: string;
@@ -35,9 +35,10 @@ export function fetchConfig(): Promise<ServerConfig> {
   return request('/api/config');
 }
 
-export function fetchKlines(symbol: string, tf: Timeframe, limit = 500, endTime?: number): Promise<KlinesResponse> {
+export function fetchKlines(symbol: string, tf: Timeframe, limit = 500, endTime?: number, closedOnly = false): Promise<KlinesResponse> {
   const params = new URLSearchParams({ symbol, tf, limit: String(limit) });
   if (endTime) params.set('endTime', String(endTime));
+  if (closedOnly) params.set('closedOnly', 'true');
   return request(`/api/klines?${params}`);
 }
 
@@ -153,3 +154,51 @@ export function subscribeSse(url: string, onEvent: (e: ProgressEvent) => void): 
   };
   return () => es.close();
 }
+
+// ---------- Chart Alerts (thủ công trên chart) ----------
+
+export async function fetchChartAlerts(symbol?: string): Promise<ChartAlert[]> {
+  const res = await request<{ alerts: ChartAlert[] }>(`/api/chart-alerts${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`);
+  return res.alerts;
+}
+
+export async function createChartAlert(data: {
+  symbol: string;
+  price: number;
+  type: 'once' | 'every';
+  color: string;
+  opacity: number;
+  note?: string;
+}): Promise<ChartAlert> {
+  const res = await request<{ alert: ChartAlert }>('/api/chart-alerts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
+  return res.alert;
+}
+
+export async function deleteChartAlert(id: string): Promise<void> {
+  await request<{ ok: boolean }>(`/api/chart-alerts/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+// ---------- Setup History & Performance ----------
+
+export async function fetchSetupHistory(params: { symbol?: string; status?: string; limit?: number } = {}): Promise<SetupHistoryRecord[]> {
+  const q = new URLSearchParams();
+  if (params.symbol) q.set('symbol', params.symbol);
+  if (params.status) q.set('status', params.status);
+  if (params.limit) q.set('limit', String(params.limit));
+  const qs = q.toString();
+  const res = await request<{ history: SetupHistoryRecord[] }>(`/api/setups/history${qs ? `?${qs}` : ''}`);
+  return res.history;
+}
+
+export async function fetchSetupPerformance(symbol?: string): Promise<SetupPerformanceSummary> {
+  const res = await request<{ summary: SetupPerformanceSummary }>(`/api/setups/performance${symbol ? `?symbol=${encodeURIComponent(symbol)}` : ''}`);
+  return res.summary;
+}
+
+

@@ -173,7 +173,7 @@ export const config = {
    *  8 top coin mặc định ±3%: sổ futures 1000 mức của altcoin phủ ±10–30% → ~17 KB/mẫu (~150 MB/24h/mã) nếu không giới hạn. */
   orderflowSampleRangePct: num('ORDERFLOW_SAMPLE_RANGE_PCT', 0),
   orderflowSampleRangePctBySymbol: symbolNums('ORDERFLOW_SAMPLE_RANGE_PCT_', ofCoin(() => 3)),
-  orderflowRetainH: int('ORDERFLOW_RETAIN_H', 24),
+  orderflowRetainH: int('ORDERFLOW_RETAIN_H', 72),
   orderflowResyncMin: int('ORDERFLOW_RESYNC_MIN', 30),
   /** Giá còn cách mép vùng phủ snapshot < N% độ rộng phía đó → snapshot lại sớm (0 = tắt). */
   orderflowEdgeResyncPct: int('ORDERFLOW_EDGE_RESYNC_PCT', 35),

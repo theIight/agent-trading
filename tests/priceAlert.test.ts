@@ -287,7 +287,7 @@ describe('AlertWatcher', () => {
     const h = harness({ feed });
     const w = h.make();
     w.start(() => () => {});
-    await w.onResult(h.add(record({}, { setups: [setup(), setup({ direction: 'LONG', entryLow: 66000, entryHigh: 66100, stopLoss: 65500 })] })));
+    await w.onResult(h.add(record({}, { setups: [setup({ takeProfits: [60000, 59000] }), setup({ direction: 'LONG', entryLow: 66000, entryHigh: 66100, stopLoss: 65500 })] })));
     expect(listeners).toHaveLength(1);
     const tick = (p: number, sec: number) => listeners.forEach(l => l(p, sec * 1000));
     tick(67000, T0 + 1); // chưa có basis → bỏ qua, đang tải

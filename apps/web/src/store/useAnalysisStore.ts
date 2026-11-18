@@ -4,6 +4,7 @@ import { cancelAnalysis, fetchAnalysis, fetchConfig, fetchHistory, fetchRunners,
 import { chartRegistry } from '../chart/chartRegistry.ts';
 import { ALL_LAYERS_ON, type LayerKey, type LayerVisibility } from '../overlays/model.ts';
 import { useAppStore } from './useAppStore.ts';
+import { useChartAlertsStore } from './useChartAlertsStore.ts';
 
 export interface Preset {
   name: string;
@@ -305,6 +306,10 @@ export const useAnalysisStore = create<AnalysisState>((set, get) => ({
   },
 
   onGlobalEvent: e => {
+    if (e.kind === 'chart_alert') {
+      useChartAlertsStore.getState().onTriggered(e.alert, e.triggerPrice);
+      return;
+    }
     if (e.kind === 'alert') {
       for (const l of alertListeners) l(e.alert);
       return;

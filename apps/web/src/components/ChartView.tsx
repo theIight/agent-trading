@@ -13,7 +13,13 @@ import { useVolumeAggStore } from '../store/useVolumeAggStore.ts';
 import { useChartSettingsStore } from '../store/useChartSettingsStore.ts';
 import { LayerToggles } from './LayerToggles.tsx';
 import { ChartContextMenu } from './ChartContextMenu.tsx';
+import { ChartScaleControls } from './ChartScaleControls.tsx';
+import { ChartAlertDialog } from './ChartAlertDialog.tsx';
+import { ChartAlertsBadge } from './ChartAlertsBadge.tsx';
+import { useChartAlertsStore } from '../store/useChartAlertsStore.ts';
 import { aggCoverageFrom } from '../chart/volumeView.ts';
+import { DEFAULT_TITLE, TabTitleController } from '../chart/tabTitle.ts';
+import { fetchKlines } from '../api/client.ts';
 
 function fmt(n: number): string {
   const digits = n >= 1000 ? 1 : n >= 1 ? 4 : 6;
@@ -53,7 +59,7 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
   const [legend, setLegend] = useState<LegendData>({ candle: null, change: null });
   const [error, setError] = useState<string | null>(null);
   const [instrument, setInstrument] = useState<InstrumentInfo | null>(null);
-  const { symbol, tf, theme } = useAppStore();
+  const { symbol, tf, theme, panelOpen, togglePanel } = useAppStore();
   const { current, layers, setCurrent, selectedSetup, showReferenceSetups, orderflowSymbols, liquidationSymbols } = useAnalysisStore();
   const { data: liq, error: liqError, showBubbles, showHeatmap, watch: watchLiquidation } = useLiquidationStore();
   const liqSymbol = liquidationSymbols.includes(symbol) ? symbol : null;
@@ -72,12 +78,25 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
   useEffect(() => {
     if (!containerRef.current) return;
     let demoKey = '';
+    // Tiêu đề tab: symbol + giá + % so với nến 1D đã đóng (trang snapshot giữ tiêu đề cũ).
+    const tabTitle = snapshot
+      ? null
+      : new TabTitleController({
+          fetchDailyRef: async sym => {
+            const last = (await fetchKlines(sym, '1d', 1, undefined, true)).candles.at(-1);
+            return last ? { close: last.close, time: last.time } : null;
+          },
+          setTitle: title => {
+            document.title = title;
+          },
+        });
     const ctrl = new ChartController(containerRef.current, {
       onLegend: setLegend,
       onStatus,
       onError: setError,
       onInstrument: setInstrument,
       onLoaded: sym => useRecentSymbolsStore.getState().add(sym),
+      onTicker: t => tabTitle?.update(t),
       onDataChange: candles => {
         setBars(prev =>
           prev.count === candles.length && prev.lastTime === (candles.at(-1)?.time ?? null)
@@ -104,6 +123,7 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
       overlayRef.current = null;
       ctrl.destroy();
       controllerRef.current = null;
+      if (tabTitle) document.title = DEFAULT_TITLE;
     };
   }, []);
 
@@ -150,6 +170,13 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
     overlayRef.current?.render();
   }, [settings]);
 
+  // Đổi kích thước cửa sổ / xoay màn hình điện thoại: cập nhật lại nhãn mức giá compact.
+  useEffect(() => {
+    const onResize = () => overlayRef.current?.render();
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+
   // Thanh lý (BTC): poll theo symbol + khung đang xem.
   useEffect(() => {
     watchLiquidation(liqSymbol, tf);
@@ -174,6 +201,24 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
   useEffect(() => {
     overlayRef.current?.setSetupView({ selectedSetup, showReferenceSetups });
   }, [selectedSetup, showReferenceSetups]);
+
+  const { alerts: chartAlerts, loadAlerts: loadChartAlerts, toast: chartToast, setToast: setChartToast } = useChartAlertsStore();
+
+  useEffect(() => {
+    if (!snapshot) void loadChartAlerts(symbol);
+  }, [symbol, snapshot, loadChartAlerts]);
+
+  useEffect(() => {
+    if (!snapshot && controllerRef.current) {
+      controllerRef.current.setChartAlerts(chartAlerts.filter(a => a.symbol === symbol.toUpperCase() && a.status === 'ACTIVE'));
+    }
+  }, [chartAlerts, symbol, snapshot]);
+
+  useEffect(() => {
+    if (!chartToast) return;
+    const id = setTimeout(() => setChartToast(null), 4000);
+    return () => clearTimeout(id);
+  }, [chartToast, setChartToast]);
 
   const c = legend.candle;
   const up = c ? c.close >= c.open : true;
@@ -210,7 +255,22 @@ export function ChartView({ onStatus, onReady, snapshot = false }: Props) {
         )}
       </div>
       <LayerToggles />
+      {!snapshot && !panelOpen && (
+        <button
+          type="button"
+          className="open-panel-btn"
+          onClick={togglePanel}
+          title="Hiện bảng phân tích"
+          aria-label="Hiện bảng phân tích"
+        >
+          «
+        </button>
+      )}
       {!snapshot && <ChartContextMenu containerRef={containerRef} controllerRef={controllerRef} resetKey={`${symbol}|${tf}`} />}
+      {!snapshot && <ChartScaleControls controllerRef={controllerRef} />}
+      {!snapshot && <ChartAlertsBadge symbol={symbol} />}
+      {!snapshot && <ChartAlertDialog symbol={symbol} />}
+      {chartToast && <div className={`chart-toast${chartToast.error ? ' error' : ''}`}>{chartToast.text}</div>}
       {liveOfSymbol && layers.orderflow && (liveOfError || (liveOf && (!liveOf.connected || liveOf.historyMin < 30))) && (
         <div className={`of-chart-status ${liveOfError || !liveOf?.connected ? 'down' : 'muted'}`}>
           Order flow:{' '}

@@ -3,27 +3,33 @@ import {
   ColorType,
   CrosshairMode,
   HistogramSeries,
+  LineStyle,
+  PriceScaleMode,
   TickMarkType,
   createChart,
   type CandlestickData,
   type HistogramData,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type MouseEventParams,
   type Time,
   type UTCTimestamp,
 } from 'lightweight-charts';
-import type { Candle, Timeframe, VolumeAggBar, VolumeSource } from '@wca/shared';
+import type { Candle, ChartAlert, Timeframe, VolumeAggBar, VolumeSource } from '@wca/shared';
 import type { InstrumentInfo } from '@wca/shared';
 import { fetchInstrument, fetchKlines } from '../api/client.ts';
 import { subscribeLiveKlines, subscribeServerLive } from './liveFeed.ts';
 import { countdownLabel, updateSkew } from './countdown.ts';
 import { CountdownPrimitive } from './CountdownPrimitive.ts';
 import { SpikeLabelPrimitive } from './SpikeLabelPrimitive.ts';
+import { ChartAlertsPrimitive } from './ChartAlertsPrimitive.ts';
 import { buildVolumeView } from './volumeView.ts';
 import { formatPriceForCopy, pricePrecision } from './copyPrice.ts';
+import type { TickerUpdate } from './tabTitle.ts';
 import { display } from './displaySettings.ts';
 import { THEMES, type ThemeName } from './theme.ts';
+import { hexToRgba } from './sound.ts';
 
 const INITIAL_BARS = 800;
 const PAGE_BARS = 800;
@@ -49,6 +55,8 @@ export interface ChartListeners {
   onDataChange?: (candles: readonly Candle[]) => void;
   /** Gọi khi tải nến của symbol thành công (lưu "xem gần đây"). */
   onLoaded?: (symbol: string) => void;
+  /** Giá mới nhất của symbol (tải xong / mỗi tick live; không theo crosshair) — cho tiêu đề tab. */
+  onTicker?: (t: TickerUpdate) => void;
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -83,6 +91,8 @@ export class ChartController {
   /** Volume gộp: cột perp + spot (vẽ sau cột perp), chỉ nến đã đóng. */
   private readonly spotVolumeSeries: ISeriesApi<'Histogram'>;
   private readonly spikeLabels = new SpikeLabelPrimitive();
+  private readonly chartAlertLines = new Map<string, IPriceLine>();
+  private readonly chartAlertsPrimitive = new ChartAlertsPrimitive();
   private volAgg: Map<number, VolumeAggBar> | null = null;
   private volSource: VolumeSource = 'futures';
   /** Nến đang chạy chưa có volume của nguồn đã chọn. */
@@ -104,7 +114,10 @@ export class ChartController {
       crosshair: { mode: CrosshairMode.Normal },
       timeScale: { timeVisible: true, secondsVisible: false, rightOffset: 12, tickMarkFormatter: formatTick },
       localization: { locale: 'vi-VN', timeFormatter: formatCrosshairTime },
-      rightPriceScale: { scaleMargins: { top: 0.08, bottom: 0.22 } },
+      rightPriceScale: {
+        scaleMargins: { top: 0.08, bottom: 0.22 },
+        mode: display().logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+      },
     });
     this.candleSeries = this.chart.addSeries(CandlestickSeries, { borderVisible: false });
     // Thêm trước cột perp để nằm phía sau (cột spot = perp + spot, phần nhô lên là spot).
@@ -137,6 +150,7 @@ export class ChartController {
         },
       }),
     );
+    this.candleSeries.attachPrimitive(this.chartAlertsPrimitive);
     this.applyTheme('dark');
 
     this.chart.subscribeCrosshairMove(this.handleCrosshair);
@@ -191,10 +205,20 @@ export class ChartController {
     return this.volRunningMissing;
   }
 
-  /** Áp lại cài đặt hiển thị (cỡ chữ trục, ngưỡng đột biến, đếm ngược). */
+  /** Áp lại cài đặt hiển thị (cỡ chữ trục, ngưỡng đột biến, đếm ngược, thang log). */
   applyDisplay(): void {
     this.chart.applyOptions({ layout: { fontSize: display().axisFontPx } });
+    this.chart.priceScale('right').applyOptions({
+      mode: display().logScale ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+    });
     this.refreshVolume();
+  }
+
+  /** Bật/tắt thang đo logarit trên trục giá. */
+  setLogScale(enabled: boolean): void {
+    this.chart.priceScale('right').applyOptions({
+      mode: enabled ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal,
+    });
   }
 
   private refreshVolume(): void {
@@ -225,6 +249,7 @@ export class ChartController {
     this.listeners.onError?.(null);
     this.listeners.onInstrument?.(null);
     this.listeners.onStatus?.('Đang tải…');
+    this.listeners.onTicker?.({ symbol, status: 'loading' });
     const infoP = fetchInstrument(symbol).catch(() => null);
     try {
       const res = await fetchKlines(symbol, tf, INITIAL_BARS);
@@ -240,6 +265,7 @@ export class ChartController {
       if (symbolChanged) this.resetPriceScale();
       this.chart.timeScale().scrollToRealTime();
       this.emitLegend(this.candles.at(-1) ?? null);
+      this.emitTicker();
       const onStatus = (s: 'connecting' | 'open' | 'closed') =>
         this.listeners.onStatus?.(s === 'open' ? 'Live' : s === 'connecting' ? 'Đang kết nối…' : 'Mất kết nối');
       this.unsubscribeLive =
@@ -265,14 +291,68 @@ export class ChartController {
       this.listeners.onInstrument?.(info);
       this.listeners.onError?.((err as Error).message);
       this.listeners.onStatus?.('Lỗi');
+      this.listeners.onTicker?.({ symbol, status: 'error' });
     }
+  }
+
+  private emitTicker(): void {
+    const last = this.candles.at(-1);
+    if (!last) return;
+    this.listeners.onTicker?.({ symbol: this.symbol, status: 'live', close: last.close, precision: this.precision });
   }
 
   destroy(): void {
     // Huỷ khi đang tải (StrictMode dev mount 2 lần, đổi trang nhanh): bỏ kết quả tải dở, không chạm chart đã remove.
     this.loadToken++;
     this.unsubscribeLive?.();
+    this.chartAlertsPrimitive.setAlerts([]);
+    for (const line of this.chartAlertLines.values()) {
+      try {
+        this.candleSeries.removePriceLine(line);
+      } catch {
+        // ignore
+      }
+    }
+    this.chartAlertLines.clear();
     this.chart.remove();
+  }
+
+  /** Cập nhật các đường nét đứt của alert giá thủ công trên chart. */
+  setChartAlerts(alerts: ChartAlert[]): void {
+    const activeIds = new Set(alerts.map(a => a.id));
+
+    // Xoá các đường không còn trong danh sách
+    for (const [id, line] of this.chartAlertLines.entries()) {
+      if (!activeIds.has(id)) {
+        try {
+          this.candleSeries.removePriceLine(line);
+        } catch {
+          // ignore
+        }
+        this.chartAlertLines.delete(id);
+      }
+    }
+
+    // Tạo mới các đường chưa có (chỉ hiển thị vạch nét đứt, không có label text trên chart)
+    for (const alert of alerts) {
+      if (this.chartAlertLines.has(alert.id)) continue;
+
+      const rgba = hexToRgba(alert.color, alert.opacity);
+
+      const line = this.candleSeries.createPriceLine({
+        price: alert.price,
+        color: rgba,
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: false,
+        title: '',
+      });
+
+      this.chartAlertLines.set(alert.id, line);
+    }
+
+    // Nhãn '>' ở vạch giá trên trục giá (giống TradingView)
+    this.chartAlertsPrimitive.setAlerts(alerts);
   }
 
   /** Cuộn chart tới một thời điểm (giây), giữ nguyên độ zoom. */
@@ -308,6 +388,7 @@ export class ChartController {
     const single = this.volAgg && this.volSource !== 'futures' && this.volSource !== 'stacked';
     this.volumeSeries.update(single && !this.volAgg!.has(c.time) ? ({ time: c.time as UTCTimestamp } as HistogramData) : this.toVolume(c));
     if (!this.crosshairActive) this.emitLegend(c);
+    this.emitTicker();
     if (!last || c.time !== last.time) this.listeners.onDataChange?.(this.candles);
   }
 
@@ -368,7 +449,8 @@ export class ChartController {
     return { price: formatPriceForCopy(price, this.precision), close };
   }
 
-  private resetPriceScale(): void {
+  /** Đưa trục giá và volume về chế độ tự động co giãn (auto scale). */
+  resetPriceScale(): void {
     this.candleSeries.priceScale().applyOptions({ autoScale: true });
     this.chart.priceScale('volume').applyOptions({ autoScale: true });
   }

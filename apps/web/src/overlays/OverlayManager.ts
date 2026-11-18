@@ -2,6 +2,7 @@ import { LineStyle, createSeriesMarkers, type IPriceLine, type ISeriesMarkersPlu
 import { tfSeconds, type AnalysisResult, type BookHeatmap, type LiveLiquidations } from '@wca/shared';
 import type { ChartController } from '../chart/ChartController.ts';
 import { THEMES, type ThemeName } from '../chart/theme.ts';
+import { shouldCompactLevels } from '../chart/displaySettings.ts';
 import { ALL_LAYERS_ON, buildOverlayModel, makeTimeMapper, webRightOffset, type LayerVisibility, type LiveOrderflowView, type OverlayModel } from './model.ts';
 import { snapshotRange, toolStartIndex } from '../snapshotMode.ts';
 import { OverlayPrimitive } from './OverlayPrimitive.ts';
@@ -124,6 +125,7 @@ export class OverlayManager {
       layers: this.layers,
       ...this.setupView,
       liveOrderflow: live,
+      compactLevels: shouldCompactLevels(),
       ...(snap ? { toolStartTime: snap.toolStartTime, toolEndTime: snap.toolEndTime } : {}),
     });
     this.model = model;
