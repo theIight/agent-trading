@@ -6,7 +6,7 @@ import { buildSuggestions } from '../store/recentSymbols.ts';
 import { SettingsButton } from './SettingsButton.tsx';
 
 export function Toolbar({ status }: { status: string }) {
-  const { symbol, tf, theme, setSymbol, setTf, toggleTheme } = useAppStore();
+  const { symbol, tf, theme, panelOpen, setSymbol, setTf, toggleTheme, togglePanel } = useAppStore();
   const [draft, setDraft] = useState(symbol);
   const { recent, remove: removeRecent } = useRecentSymbolsStore();
   const [open, setOpen] = useState(false);
@@ -32,6 +32,13 @@ export function Toolbar({ status }: { status: string }) {
     window.addEventListener('resize', place);
     return () => window.removeEventListener('resize', place);
   }, [open]);
+
+  // Danh sách dài (tới 100 mục gần đây) → giữ mục đang chọn bằng ↑/↓ trong tầm nhìn.
+  const listRef = useRef<HTMLUListElement>(null);
+  useEffect(() => {
+    if (active < 0) return;
+    listRef.current?.children[active]?.scrollIntoView({ block: 'nearest' });
+  }, [active]);
 
   const choose = (value: string) => {
     const next = normalizeSymbol(value);
@@ -99,6 +106,7 @@ export function Toolbar({ status }: { status: string }) {
         />
         {open && pos && suggestions.length > 0 && (
           <ul
+            ref={listRef}
             id="symbol-suggest"
             className="symbol-suggest"
             role="listbox"
@@ -164,6 +172,18 @@ export function Toolbar({ status }: { status: string }) {
       <SettingsButton />
       <button type="button" className="icon-btn" onClick={toggleTheme} title="Đổi giao diện sáng/tối">
         {theme === 'dark' ? '☀' : '☾'}
+      </button>
+      <button
+        type="button"
+        className={`icon-btn ${panelOpen ? 'active' : ''}`}
+        onClick={togglePanel}
+        title={panelOpen ? 'Ẩn bảng phân tích' : 'Hiện bảng phân tích'}
+        aria-label={panelOpen ? 'Ẩn bảng phân tích' : 'Hiện bảng phân tích'}
+      >
+        <svg viewBox="0 0 16 16" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <rect x="2" y="2" width="12" height="12" rx="1.5" />
+          <line x1="10" y1="2" x2="10" y2="14" />
+        </svg>
       </button>
     </header>
   );

@@ -40,3 +40,25 @@
 
 ## Approval Status
 Đã duyệt (2026-11-13, "ok"). Nhánh `feat/recent-symbols` tách từ `596b481` (= main).
+
+---
+
+# Thay đổi 2026-11-17: nâng giới hạn lên 100 symbol
+
+## Requirements / Spec
+1. Lịch sử "gần đây" giữ tối đa **100** symbol (trước: 8). Dữ liệu localStorage cũ (≤ 8 mục) giữ nguyên.
+2. Dropdown vẫn cao tối đa 320px, cuộn dọc (CSS sẵn có). Dùng ↑/↓ thì mục đang chọn luôn được cuộn vào tầm nhìn (trước đây không cần vì 8 + 3 mục vừa khung).
+3. Không đổi contract agent/server.
+
+## Technical Design
+- `apps/web/src/store/recentSymbols.ts`: `MAX_RECENT = 100`.
+- `Toolbar.tsx`: `useEffect` theo `active` → `li[active].scrollIntoView({ block: 'nearest' })`.
+- `SPEC.md`: "tối đa 8 symbol" → "tối đa 100 symbol".
+- `tests/recentSymbols.test.ts`: chỉnh test cắt theo `MAX_RECENT` nếu đang hard-code 8.
+
+## Tests / Acceptance
+- `npm run typecheck`, `npm run lint`, `npm test`.
+- Chụp dropdown có nhiều mục bằng `scripts/screenshot.ts`: cuộn được, ↑/↓ giữ mục chọn trong tầm nhìn.
+
+## Approval Status
+Đã duyệt (2026-11-17, "làm và restart luôn").

@@ -239,6 +239,38 @@ describe('buildOverlayModel', () => {
     expect(m.rects).toHaveLength(1);
     expect(m.lines.map(l => l.label)).toEqual(['Creek']);
   });
+
+  it('rút gọn nhãn mức giá khi bật compactLevels', () => {
+    const full = buildOverlayModel(
+      analysis({
+        levels: [
+          { kind: 'RESISTANCE', price: 105, note: '' },
+          { kind: 'SUPPORT', price: 95, note: '' },
+          { kind: 'TARGET', price: 120, note: '' },
+          { kind: 'INVALIDATION', price: 90, note: '' },
+        ],
+      }),
+      candles,
+      '4h',
+      { compactLevels: false },
+    );
+    expect(full.priceLines.map(p => p.title)).toEqual(['Kháng cự', 'Hỗ trợ', 'Mục tiêu', 'Vô hiệu']);
+
+    const compact = buildOverlayModel(
+      analysis({
+        levels: [
+          { kind: 'RESISTANCE', price: 105, note: '' },
+          { kind: 'SUPPORT', price: 95, note: '' },
+          { kind: 'TARGET', price: 120, note: '' },
+          { kind: 'INVALIDATION', price: 90, note: '' },
+        ],
+      }),
+      candles,
+      '4h',
+      { compactLevels: true },
+    );
+    expect(compact.priceLines.map(p => p.title)).toEqual(['KC', 'HT', 'TP', 'VH']);
+  });
 });
 
 describe('layer Order flow (Bookmap)', () => {

@@ -19,6 +19,7 @@ import {
 } from '@wca/shared';
 import { fetchAlerts, fetchBookmapStatus, fetchOrderflowStatus, type BookmapImageStatus, type OrderflowStatus } from '../api/client.ts';
 import { chartRegistry } from '../chart/chartRegistry.ts';
+import { SetupHistoryModal } from './SetupHistoryModal.tsx';
 import {
   bookmapEnabled,
   bookmapOffsetOf,
@@ -428,9 +429,42 @@ function AlertLine({ alert }: { alert: PriceAlert }) {
   if (alert.status === 'TRIGGERED') {
     return (
       <div className="alert-line triggered">
-        ✅ Đã chạm entry {fmtClock(alert.statusAt)}
+        ✅ Đã khớp entry {fmtClock(alert.entryAt ?? alert.statusAt)}
+        {alert.entryPrice !== undefined && <> · giá {fmtPrice(alert.entryPrice)}</>}
+        <span className="muted"> · Đang theo dõi TP/SL</span>
+      </div>
+    );
+  }
+  if (alert.status === 'TP_HIT') {
+    const lastTp = alert.hitTps?.at(-1);
+    return (
+      <div className="alert-line tp-hit">
+        🎯 Đã chạm {lastTp ? `TP${lastTp.index + 1}` : 'TP'} ({fmtClock(alert.statusAt)})
+        {alert.realizedRr !== undefined && <span className="up"> · +{alert.realizedRr.toFixed(2)}R</span>}
+        <span className="muted"> · Tiếp tục theo dõi TP/SL tiếp theo</span>
+      </div>
+    );
+  }
+  if (alert.status === 'CLOSED') {
+    return (
+      <div className="alert-line tp-hit">
+        🏆 Đã đạt full TP {fmtClock(alert.statusAt)}
+        {alert.realizedRr !== undefined && <b className="up"> · +{alert.realizedRr.toFixed(2)}R</b>}
+      </div>
+    );
+  }
+  if (alert.status === 'SL_HIT') {
+    const hadTp = (alert.hitTps?.length ?? 0) > 0;
+    return (
+      <div className="alert-line sl-hit">
+        🛑 Đã chạm SL {fmtClock(alert.statusAt)}
         {alert.triggerPrice !== undefined && <> · giá {fmtPrice(alert.triggerPrice)}</>}
-        {alert.note && <span className="muted"> · {alert.note}</span>}
+        {alert.realizedRr !== undefined && (
+          <b className={alert.realizedRr >= 0 ? 'up' : 'down'}>
+            {' '}· {alert.realizedRr >= 0 ? `+${alert.realizedRr.toFixed(2)}` : alert.realizedRr.toFixed(2)}R
+          </b>
+        )}
+        {hadTp && <span className="muted"> (đã chốt 1 phần TP trước đó)</span>}
       </div>
     );
   }
@@ -620,6 +654,7 @@ function OrderflowCard({ of, symbol }: { of: Orderflow; symbol: string }) {
 }
 
 function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | null }) {
+  const [showPerfModal, setShowPerfModal] = useState(false);
   return (
     <section className="panel-section result">
       <div className="result-head">
@@ -643,8 +678,19 @@ function Result({ a, record }: { a: AnalysisResult; record: AnalysisRecord | nul
         ))}
       </ol>
 
-      <div className="section-title">Setup</div>
+      <div className="section-title section-title-row">
+        <span>Setup</span>
+        <button
+          type="button"
+          className="perf-history-btn"
+          onClick={() => setShowPerfModal(true)}
+          title="Xem thống kê tỉ lệ thắng, R:R và lịch sử khớp lệnh setup"
+        >
+          📊 Hiệu quả setup
+        </button>
+      </div>
       {a.tradePlan ? <TradePlanCard plan={a.tradePlan} analysisId={record?.id ?? a.id} /> : <LegacyAction a={a} />}
+      {showPerfModal && <SetupHistoryModal currentSymbol={record?.symbol ?? a.symbol} onClose={() => setShowPerfModal(false)} />}
 
       {a.orderflow && (
         <>
@@ -755,6 +801,7 @@ function History() {
 export function AnalysisPanel() {
   const [tab, setTab] = useState<'analysis' | 'history'>('analysis');
   const { current, currentRecord, run, lastError, setCurrent } = useAnalysisStore();
+  const togglePanel = useAppStore(s => s.togglePanel);
 
   return (
     <aside className="panel">
@@ -770,6 +817,15 @@ export function AnalysisPanel() {
             Xoá overlay
           </button>
         )}
+        <button
+          type="button"
+          className="collapse-panel-btn"
+          onClick={togglePanel}
+          title="Thu gọn bảng phân tích"
+          aria-label="Thu gọn bảng phân tích"
+        >
+          »
+        </button>
       </div>
       <div className="panel-body">
         {tab === 'analysis' ? (

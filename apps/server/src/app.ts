@@ -38,6 +38,11 @@ import { TelegramMessageStore } from './notify/telegramMessages.ts';
 import { AlertRepo } from './alerts/alertRepo.ts';
 import { AlertWatcher } from './alerts/alertWatcher.ts';
 import { CollectorPriceFeed } from './alerts/priceFeed.ts';
+import { ChartAlertRepo } from './alerts/chartAlertRepo.ts';
+import { ChartAlertWatcher } from './alerts/chartAlertWatcher.ts';
+import { SetupHistoryRepo } from './alerts/setupHistoryRepo.ts';
+import { registerChartAlertRoutes } from './routes/chartAlerts.ts';
+import { registerSetupRoutes } from './routes/setups.ts';
 
 export interface AppDeps {
   config?: AppConfig;
@@ -232,10 +237,12 @@ export async function buildApp(deps: AppDeps = {}) {
   if (stopTelegram) app.log.info(`[telegram] bật: gửi kết quả phân tích, chụp chart từ ${cfg.snapshotWebUrl}`);
   // Alert chạm vùng entry (crypto): chạy cả khi không có Telegram (web vẫn thấy trạng thái).
   const alertRepo = new AlertRepo(db);
+  const setupHistoryRepo = new SetupHistoryRepo(db);
   const watcher =
     cfg.priceAlerts && deps.priceAlerts !== false
       ? new AlertWatcher({
           repo: alertRepo,
+          historyRepo: setupHistoryRepo,
           klines,
           isCrypto: symbol => router.sourceOf(symbol) === 'binance-futures',
           getRecord: id => repo.get(id),
@@ -260,9 +267,39 @@ export async function buildApp(deps: AppDeps = {}) {
         })
       : null;
   const stopWatcher = watcher?.start(listener => service.subscribe(listener)) ?? null;
+
+  // Alert giá thủ công trên biểu đồ (chuột phải)
+  const chartAlertRepo = new ChartAlertRepo(db);
+  const chartPriceFeed =
+    binanceOrderflow && collectors.length
+      ? new CollectorPriceFeed({
+          sources: Object.fromEntries(collectors.map(c => [c.symbol, c])),
+          basisOf: async (symbol, nowSec) => (await binanceOrderflow.basisFn(symbol, nowSec)).current,
+          log: msg => app.log.warn(msg),
+        })
+      : undefined;
+  const chartAlertWatcher = new ChartAlertWatcher({
+    repo: chartAlertRepo,
+    priceFeed: chartPriceFeed,
+    sender: tgClient && cfg.telegramChatId ? tgClient : null,
+    telegramChatId: cfg.telegramChatId,
+    telegramThreadId: cfg.telegramThreadId,
+    log: msg => app.log.info(msg),
+  });
+  const stopChartAlertWatcher = chartAlertWatcher.start();
+  registerChartAlertRoutes(app, chartAlertRepo, chartAlertWatcher);
+  registerSetupRoutes(app, setupHistoryRepo);
+
   registerAnalysisRoutes(app, service, repo, internalToken, {
     byAnalysis: id => alertRepo.byAnalysis(id),
-    subscribe: listener => watcher?.subscribe(listener) ?? (() => {}),
+    subscribe: listener => {
+      const offWatcher = watcher?.subscribe(listener);
+      const offChart = chartAlertWatcher.subscribe(listener);
+      return () => {
+        offWatcher?.();
+        offChart();
+      };
+    },
   });
 
   // Bot nhận lệnh trong group (long polling). Chỉ chat trong whitelist.
@@ -285,6 +322,7 @@ export async function buildApp(deps: AppDeps = {}) {
       : null;
 
   app.addHook('onClose', async () => {
+    stopChartAlertWatcher();
     stopWatcher?.();
     await watcher?.idle();
     stopTelegram?.();

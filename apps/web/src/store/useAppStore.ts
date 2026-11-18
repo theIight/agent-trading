@@ -10,6 +10,7 @@ interface Prefs {
   symbol: string;
   tf: Timeframe;
   theme: ThemeName;
+  panelOpen?: boolean;
 }
 
 function loadPrefs(): Partial<Prefs> {
@@ -29,9 +30,12 @@ function savePrefs(p: Prefs): void {
 }
 
 interface AppState extends Prefs {
+  panelOpen: boolean;
   setSymbol: (symbol: string) => void;
   setTf: (tf: Timeframe) => void;
   toggleTheme: () => void;
+  togglePanel: () => void;
+  setPanelOpen: (open: boolean) => void;
 }
 
 /** Chế độ snapshot không đọc/ghi symbol, tf trên URL. */
@@ -52,6 +56,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   symbol: initial.symbol ?? 'BTCUSDT',
   tf: initial.tf ?? '4h',
   theme: initial.theme ?? 'dark',
+  panelOpen: initial.panelOpen ?? true,
   setSymbol: symbol => {
     set({ symbol });
     savePrefs(get());
@@ -64,6 +69,15 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
   toggleTheme: () => {
     set({ theme: get().theme === 'dark' ? 'light' : 'dark' });
+    savePrefs(get());
+  },
+  togglePanel: () => {
+    const next = !get().panelOpen;
+    set({ panelOpen: next });
+    savePrefs(get());
+  },
+  setPanelOpen: open => {
+    set({ panelOpen: open });
     savePrefs(get());
   },
 }));

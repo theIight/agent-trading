@@ -55,13 +55,22 @@ export const COLORS = {
   phaseFills: ['rgba(255,193,7,0.06)', 'rgba(156,39,176,0.06)', 'rgba(0,188,212,0.06)', 'rgba(76,175,80,0.06)', 'rgba(255,87,34,0.06)'],
 };
 
-const LEVEL_LABELS: Record<string, string> = {
+export const LEVEL_LABELS: Record<string, string> = {
   SUPPORT: 'Hỗ trợ',
   RESISTANCE: 'Kháng cự',
   CREEK: 'Creek',
   ICE: 'Ice',
   INVALIDATION: 'Vô hiệu',
   TARGET: 'Mục tiêu',
+};
+
+export const COMPACT_LEVEL_LABELS: Record<string, string> = {
+  SUPPORT: 'HT',
+  RESISTANCE: 'KC',
+  CREEK: 'Creek',
+  ICE: 'Ice',
+  INVALIDATION: 'VH',
+  TARGET: 'TP',
 };
 
 export interface MarkerItem {
@@ -273,6 +282,8 @@ export interface BuildOptions {
   toolStartTime?: number;
   /** Ảnh chụp: position tool kéo tới mốc này (mép phải khung nhìn) thay cho `validUntil`. */
   toolEndTime?: number;
+  /** Rút gọn nhãn mức giá thành KC, HT, TP, VH (thay vì Kháng cự, Hỗ trợ...). */
+  compactLevels?: boolean;
 }
 
 type OrderflowLevels = NonNullable<AnalysisResult['orderflow']>['levels'];
@@ -476,10 +487,11 @@ export function buildOverlayModel(
       INVALIDATION: { color: COLORS.bear, style: 'solid' },
       TARGET: { color: COLORS.bull, style: 'dashed' },
     };
+    const labels = opts.compactLevels ? COMPACT_LEVEL_LABELS : LEVEL_LABELS;
     for (const lv of analysis.levels) {
       const s = levelStyle[lv.kind] ?? { color: COLORS.neutral, style: 'dotted' as const };
       // Nhãn ngắn để không đè lên nến; ghi chú đầy đủ xem ở panel.
-      model.priceLines.push({ price: lv.price, ...s, title: LEVEL_LABELS[lv.kind] ?? lv.kind });
+      model.priceLines.push({ price: lv.price, ...s, title: labels[lv.kind] ?? lv.kind });
     }
   }
 

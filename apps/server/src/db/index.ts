@@ -101,6 +101,44 @@ const MIGRATIONS: string[] = [
      sent_at INTEGER NOT NULL
    );`,
   `CREATE INDEX IF NOT EXISTS idx_telegram_messages ON telegram_messages(analysis_id, sent_at);`,
+  // Alert giá thủ công trên biểu đồ (chuột phải).
+  `CREATE TABLE IF NOT EXISTS chart_alerts (
+     id TEXT PRIMARY KEY,
+     symbol TEXT NOT NULL,
+     price REAL NOT NULL,
+     type TEXT NOT NULL,
+     color TEXT NOT NULL,
+     opacity REAL NOT NULL,
+     status TEXT NOT NULL,
+     created_at INTEGER NOT NULL,
+     triggered_at INTEGER,
+     note TEXT
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_chart_alerts_status_symbol ON chart_alerts(status, symbol);`,
+  // Lịch sử lệnh và đánh giá hiệu quả setup (khớp entry, chạm TP, chạm SL).
+  `CREATE TABLE IF NOT EXISTS setup_history (
+     id INTEGER PRIMARY KEY AUTOINCREMENT,
+     alert_id INTEGER NOT NULL,
+     analysis_id TEXT NOT NULL,
+     symbol TEXT NOT NULL,
+     setup_index INTEGER NOT NULL,
+     direction TEXT NOT NULL,
+     entry_type TEXT NOT NULL,
+     tf TEXT NOT NULL,
+     entry_price REAL NOT NULL,
+     entry_at INTEGER NOT NULL,
+     stop_loss REAL NOT NULL,
+     take_profits TEXT NOT NULL,
+     hit_tps TEXT NOT NULL,
+     exit_price REAL,
+     exit_at INTEGER,
+     status TEXT NOT NULL,
+     realized_rr REAL,
+     pnl_pct REAL,
+     note TEXT
+   );`,
+  `CREATE INDEX IF NOT EXISTS idx_setup_history_symbol ON setup_history(symbol, status);`,
+  `CREATE INDEX IF NOT EXISTS idx_setup_history_alert ON setup_history(alert_id);`,
 ];
 
 export function openDb(dbPath: string): Db {
@@ -113,6 +151,10 @@ export function openDb(dbPath: string): Db {
   addColumnIfMissing(db, 'analyses', 'bookmap', 'INTEGER');
   addColumnIfMissing(db, 'analyses', 'orderflow_source', 'TEXT');
   addColumnIfMissing(db, 'price_alerts', 'arm_price', 'REAL');
+  addColumnIfMissing(db, 'price_alerts', 'entry_price', 'REAL');
+  addColumnIfMissing(db, 'price_alerts', 'entry_at', 'INTEGER');
+  addColumnIfMissing(db, 'price_alerts', 'hit_tps', 'TEXT');
+  addColumnIfMissing(db, 'price_alerts', 'realized_rr', 'REAL');
   return db;
 }
 
