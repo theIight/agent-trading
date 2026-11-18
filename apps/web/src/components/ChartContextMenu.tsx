@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from 'react';
 import type { ChartController } from '../chart/ChartController.ts';
 import { clampMenuPosition } from '../chart/copyPrice.ts';
+import { useChartAlertsStore } from '../store/useChartAlertsStore.ts';
 
 interface Props {
   containerRef: RefObject<HTMLDivElement | null>;
@@ -35,6 +36,7 @@ async function writeClipboard(text: string): Promise<void> {
 
 /** Menu chuột phải trên chart: copy giá tại con trỏ / giá đóng nến dưới con trỏ. */
 export function ChartContextMenu({ containerRef, controllerRef, resetKey }: Props) {
+  const { alerts, openDialog, removeAlert } = useChartAlertsStore();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [pos, setPos] = useState<{ left: number; top: number } | null>(null);
   const [toast, setToast] = useState<{ text: string; error: boolean } | null>(null);
@@ -104,6 +106,11 @@ export function ChartContextMenu({ containerRef, controllerRef, resetKey }: Prop
     }
   };
 
+  const currentPrice = menu ? parseFloat(menu.price) : 0;
+  const nearAlert = menu
+    ? alerts.find(a => a.status === 'ACTIVE' && Math.abs(a.price - currentPrice) / currentPrice < 0.01)
+    : undefined;
+
   return (
     <>
       {menu && (
@@ -120,6 +127,30 @@ export function ChartContextMenu({ containerRef, controllerRef, resetKey }: Prop
           {menu.close !== null && (
             <button type="button" role="menuitem" onClick={() => void copy(menu.close!)}>
               Copy giá đóng <b>{menu.close}</b>
+            </button>
+          )}
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setMenu(null);
+              openDialog(parseFloat(menu.price));
+            }}
+          >
+            🔔 Đặt alert giá <b>{menu.price}</b>
+          </button>
+          {nearAlert && (
+            <button
+              type="button"
+              role="menuitem"
+              className="menu-danger"
+              onClick={() => {
+                setMenu(null);
+                void removeAlert(nearAlert.id);
+                setToast({ text: `Đã xoá alert giá ${nearAlert.price}`, error: false });
+              }}
+            >
+              🗑️ Xoá alert giá <b>{nearAlert.price}</b>
             </button>
           )}
         </div>

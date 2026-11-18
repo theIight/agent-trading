@@ -35,6 +35,10 @@ export interface DisplaySettings {
   /** Thang màu Bookmap tự chọn (hex, mốc 40/60/80/100%); null = mặc định theo theme. */
   ofHeatStops: HeatStops | null;
   showCountdown: boolean;
+  /** Thang đo logarit trên trục giá. */
+  logScale: boolean;
+  /** Rút gọn nhãn mức giá thành KC, HT, TP... (trên mobile tự động bật kể cả khi false). */
+  compactLevels: boolean;
 }
 
 export type HeatStops = [string, string, string, string];
@@ -63,9 +67,11 @@ export const DEFAULT_DISPLAY: DisplaySettings = {
   ofColorMode: 'bookmap',
   ofHeatStops: null,
   showCountdown: true,
+  logScale: false,
+  compactLevels: false,
 };
 
-type NumKey = Exclude<keyof DisplaySettings, 'showCountdown' | 'ofColorMode' | 'ofHeatStops' | 'bookHeatMinQty'>;
+type NumKey = Exclude<keyof DisplaySettings, 'showCountdown' | 'logScale' | 'compactLevels' | 'ofColorMode' | 'ofHeatStops' | 'bookHeatMinQty'>;
 
 export const DISPLAY_RANGES: Record<NumKey, { min: number; max: number; step: number; label: string; unit: string }> = {
   spikeFontPx: { min: 7, max: 14, step: 1, label: 'Cỡ chữ nhãn đột biến volume', unit: 'px' },
@@ -94,6 +100,8 @@ export function sanitizeDisplay(raw: unknown): DisplaySettings {
     out[key] = Math.round(out[key] * 100) / 100;
   }
   if (typeof src.showCountdown === 'boolean') out.showCountdown = src.showCountdown;
+  if (typeof src.logScale === 'boolean') out.logScale = src.logScale;
+  if (typeof src.compactLevels === 'boolean') out.compactLevels = src.compactLevels;
   if (OF_COLOR_MODES.some(m => m.value === src.ofColorMode)) out.ofColorMode = src.ofColorMode as OfColorMode;
   const stops = src.ofHeatStops;
   if (Array.isArray(stops) && stops.length === 4 && stops.every(h => typeof h === 'string' && /^#[0-9a-f]{6}$/i.test(h))) {
@@ -136,6 +144,18 @@ let current: DisplaySettings = { ...DEFAULT_DISPLAY };
 /** Cài đặt hiện tại (renderer đọc mỗi lần vẽ). */
 export function display(): DisplaySettings {
   return current;
+}
+
+/**
+ * Kiểm tra xem có nên rút gọn nhãn mức giá (KC, HT, TP, VH) không:
+ * - Khi bật trong cài đặt `compactLevels: true`
+ * - Hoặc khi chiều rộng chart/màn hình nhỏ (≤ 768px, tức thiết bị di động / màn hình hẹp).
+ */
+export function shouldCompactLevels(containerWidth?: number): boolean {
+  if (current.compactLevels) return true;
+  if (containerWidth !== undefined && containerWidth > 0) return containerWidth <= 768;
+  if (typeof window !== 'undefined' && typeof window.innerWidth === 'number') return window.innerWidth <= 768;
+  return false;
 }
 
 export function setDisplay(s: DisplaySettings): void {

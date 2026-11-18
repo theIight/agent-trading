@@ -191,6 +191,14 @@ export function SettingsButton() {
             <span>Hiện đếm ngược đóng nến</span>
             <input type="checkbox" checked={settings.showCountdown} onChange={e => update({ showCountdown: e.target.checked })} />
           </label>
+          <label className="settings-row check">
+            <span>Thang đo logarit (trục giá)</span>
+            <input type="checkbox" checked={settings.logScale} onChange={e => update({ logScale: e.target.checked })} />
+          </label>
+          <label className="settings-row check">
+            <span>Rút gọn nhãn mức giá (KC, HT, TP)</span>
+            <input type="checkbox" checked={settings.compactLevels} onChange={e => update({ compactLevels: e.target.checked })} />
+          </label>
           <div className="settings-foot">
             <span className="muted">Ngưỡng đột biến chỉ đổi phần vẽ trên chart (agent dùng ngưỡng server).</span>
             <button type="button" className="chip ghost" onClick={reset}>

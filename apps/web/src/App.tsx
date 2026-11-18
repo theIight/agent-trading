@@ -10,6 +10,7 @@ import { useAppStore } from './store/useAppStore.ts';
 export function App() {
   const [status, setStatus] = useState('');
   const theme = useAppStore(s => s.theme);
+  const panelOpen = useAppStore(s => s.panelOpen);
   const onGlobalEvent = useAnalysisStore(s => s.onGlobalEvent);
 
   useEffect(() => {
@@ -24,7 +25,7 @@ export function App() {
       <Toolbar status={status} />
       <main className="main">
         <ChartView onStatus={setStatus} onReady={chartRegistry.set} />
-        <AnalysisPanel />
+        {panelOpen && <AnalysisPanel />}
       </main>
     </div>
   );

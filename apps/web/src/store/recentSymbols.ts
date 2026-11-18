@@ -2,7 +2,7 @@ import { normalizeSymbol } from '@wca/shared';
 
 // Symbol xem gần đây (mới nhất trước) + gợi ý cho ô nhập symbol trên toolbar.
 
-export const MAX_RECENT = 8;
+export const MAX_RECENT = 100;
 
 export interface Suggestion {
   symbol: string;

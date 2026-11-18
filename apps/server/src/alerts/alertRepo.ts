@@ -1,4 +1,4 @@
-import type { PriceAlert, PriceAlertStatus } from '@wca/shared';
+import type { PriceAlert, PriceAlertStatus, SetupHitTp } from '@wca/shared';
 import type { Db } from '../db/index.ts';
 import type { NewPriceAlert } from './alertLogic.ts';
 
@@ -24,6 +24,10 @@ interface Row {
   status: PriceAlertStatus;
   status_at: number;
   trigger_price: number | null;
+  entry_price: number | null;
+  entry_at: number | null;
+  hit_tps: string | null;
+  realized_rr: number | null;
   note: string | null;
 }
 
@@ -48,6 +52,10 @@ function toAlert(r: Row): PriceAlert {
     status: r.status,
     statusAt: r.status_at,
     ...(r.trigger_price !== null ? { triggerPrice: r.trigger_price } : {}),
+    ...(r.entry_price !== null ? { entryPrice: r.entry_price } : {}),
+    ...(r.entry_at !== null ? { entryAt: r.entry_at } : {}),
+    ...(r.hit_tps ? { hitTps: JSON.parse(r.hit_tps) as SetupHitTp[] } : {}),
+    ...(r.realized_rr !== null ? { realizedRr: r.realized_rr } : {}),
     ...(r.note !== null ? { note: r.note } : {}),
   };
 }
@@ -117,14 +125,60 @@ export class AlertRepo {
   /** ARMED → `status` (TRIGGERED / INVALIDATED / EXPIRED / CANCELED). Trả alert mới nếu đổi được, null nếu không còn ARMED. */
   transition(id: number, status: Exclude<PriceAlertStatus, 'ARMED'>, atSec: number, extra: { price?: number; note?: string; checkedUntil?: number } = {}): PriceAlert | null {
     return this.db.transaction(() => {
+      const isTriggered = status === 'TRIGGERED';
       const r = this.db
         .prepare(
           `UPDATE price_alerts SET status = ?, status_at = ?, trigger_price = COALESCE(?, trigger_price), note = COALESCE(?, note),
-             checked_until = COALESCE(?, checked_until)
+             checked_until = COALESCE(?, checked_until),
+             entry_price = CASE WHEN ? THEN COALESCE(?, trigger_price) ELSE entry_price END,
+             entry_at = CASE WHEN ? THEN ? ELSE entry_at END
            WHERE id = ? AND status = 'ARMED'`,
         )
-        .run(status, atSec, extra.price ?? null, extra.note ?? null, extra.checkedUntil ?? null, id);
+        .run(status, atSec, extra.price ?? null, extra.note ?? null, extra.checkedUntil ?? null, isTriggered ? 1 : 0, extra.price ?? null, isTriggered ? 1 : 0, atSec, id);
       return r.changes ? this.get(id) : null;
+    })();
+  }
+
+  /** Lấy các alert đang chạy vị thế (đã khớp entry, chưa chạm SL hoặc full TP). */
+  listInTrade(symbol?: string): PriceAlert[] {
+    const rows = symbol
+      ? this.db.prepare(`SELECT * FROM price_alerts WHERE status IN ('TRIGGERED', 'TP_HIT') AND symbol = ? ORDER BY id`).all(symbol)
+      : this.db.prepare(`SELECT * FROM price_alerts WHERE status IN ('TRIGGERED', 'TP_HIT') ORDER BY id`).all();
+    return (rows as Row[]).map(toAlert);
+  }
+
+  updateTpHit(id: number, hitTp: SetupHitTp, isFinal = false): PriceAlert | null {
+    return this.db.transaction(() => {
+      const curr = this.get(id);
+      if (!curr) return null;
+      const hitTps = [...(curr.hitTps?.filter(h => h.index !== hitTp.index) ?? []), hitTp].sort((a, b) => a.index - b.index);
+      const maxRr = Math.max(...hitTps.map(h => h.riskReward));
+      const nextStatus: PriceAlertStatus = isFinal ? 'CLOSED' : 'TP_HIT';
+
+      this.db
+        .prepare(
+          `UPDATE price_alerts
+           SET status = ?, status_at = ?, hit_tps = ?, realized_rr = ?, trigger_price = ?,
+               note = ?
+           WHERE id = ? AND status IN ('TRIGGERED', 'TP_HIT')`
+        )
+        .run(nextStatus, hitTp.time, JSON.stringify(hitTps), maxRr, hitTp.price, `chạm TP${hitTp.index + 1}`, id);
+
+      return this.get(id);
+    })();
+  }
+
+  updateSlHit(id: number, price: number, atSec: number, realizedRr: number): PriceAlert | null {
+    return this.db.transaction(() => {
+      this.db
+        .prepare(
+          `UPDATE price_alerts
+           SET status = 'SL_HIT', status_at = ?, trigger_price = ?, realized_rr = ?, note = 'chạm SL'
+           WHERE id = ? AND status IN ('TRIGGERED', 'TP_HIT')`
+        )
+        .run(atSec, price, realizedRr, id);
+
+      return this.get(id);
     })();
   }
 
